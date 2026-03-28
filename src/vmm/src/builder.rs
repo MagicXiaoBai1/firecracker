@@ -37,6 +37,7 @@ use crate::devices::virtio::net::Net;
 use crate::devices::virtio::pmem::device::Pmem;
 use crate::devices::virtio::rng::Entropy;
 use crate::devices::virtio::vsock::{Vsock, VsockUnixBackend};
+use crate::devices::vfio::VfioDevice;
 #[cfg(feature = "gdb")]
 use crate::gdb;
 use crate::initrd::{InitrdConfig, InitrdError};
@@ -245,6 +246,10 @@ pub fn build_microvm_for_boot(
         &mut boot_cmdline,
         vm_resources.pmem.devices.iter(),
         event_manager,
+    )?;
+    attach_vfio_devices(
+        &mut device_manager,
+        vm_resources.vfio_devices.devices.iter(),
     )?;
 
     if let Some(unix_vsock) = vm_resources.vsock.get() {
@@ -774,6 +779,25 @@ fn attach_balloon_device(
     let id = String::from(balloon.lock().expect("Poisoned lock").id());
     // The device mutex mustn't be locked here otherwise it will deadlock.
     device_manager.attach_virtio_device(vm, id, balloon.clone(), cmdline, event_manager, false)
+}
+
+/// Register all VFIO passthrough devices with the [`DeviceManager`].
+///
+/// Unlike virtio devices, VFIO devices are tracked by the device manager for
+/// their file-descriptor lifetimes but do not participate in the virtio queue
+/// or event-loop machinery.
+fn attach_vfio_devices<'a, I>(
+    device_manager: &mut DeviceManager,
+    vfio_devices: I,
+) -> Result<(), StartMicrovmError>
+where
+    I: Iterator<Item = &'a Arc<Mutex<VfioDevice>>> + std::fmt::Debug,
+{
+    for device in vfio_devices {
+        let id = device.lock().expect("Poisoned lock").config.id.clone();
+        device_manager.attach_vfio_device(id, device.clone());
+    }
+    Ok(())
 }
 
 #[cfg(test)]

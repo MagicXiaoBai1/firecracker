@@ -110,6 +110,8 @@ pub struct DeviceManager {
     pub acpi_devices: ACPIDeviceManager,
     /// PCIe devices
     pub pci_devices: PciDevices,
+    /// VFIO passthrough devices (tracked for FD lifetime management)
+    pub vfio_devices: Vec<(String, Arc<Mutex<crate::devices::vfio::VfioDevice>>)>,
 }
 
 impl DeviceManager {
@@ -185,6 +187,7 @@ impl DeviceManager {
             legacy_devices,
             acpi_devices: ACPIDeviceManager::default(),
             pci_devices: PciDevices::new(),
+            vfio_devices: Vec::new(),
         })
     }
 
@@ -405,6 +408,21 @@ impl DeviceManager {
     pub fn is_pci_enabled(&self) -> bool {
         self.pci_devices.pci_segment.is_some()
     }
+
+    /// Register a VFIO passthrough device with the device manager.
+    ///
+    /// The device manager holds a reference-counted handle to the [`VfioDevice`]
+    /// so that the underlying file descriptors remain open for the lifetime of
+    /// the VM.  VFIO devices are not part of the virtio or MMIO transport
+    /// layers; they communicate with the guest via KVM user-space memory regions
+    /// and direct PCI access.
+    pub fn attach_vfio_device(
+        &mut self,
+        id: String,
+        device: Arc<Mutex<crate::devices::vfio::VfioDevice>>,
+    ) {
+        self.vfio_devices.push((id, device));
+    }
 }
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
@@ -548,6 +566,7 @@ impl<'a> Persist<'a> for DeviceManager {
             legacy_devices,
             acpi_devices,
             pci_devices,
+            vfio_devices: Vec::new(),
         };
 
         // Restore serial.
@@ -633,6 +652,7 @@ pub(crate) mod tests {
             legacy_devices,
             acpi_devices,
             pci_devices,
+            vfio_devices: Vec::new(),
         }
     }
 
