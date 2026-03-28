@@ -30,6 +30,7 @@ use crate::vmm_config::mmds::{MmdsConfig, MmdsConfigError};
 use crate::vmm_config::net::*;
 use crate::vmm_config::pmem::{PmemBuilder, PmemConfig, PmemConfigError};
 use crate::vmm_config::serial::SerialConfig;
+use crate::vmm_config::vfio::VfioDeviceConfig;
 use crate::vmm_config::vsock::*;
 use crate::vstate::memory;
 use crate::vstate::memory::{GuestRegionMmap, MemoryError};
@@ -99,6 +100,9 @@ pub struct VmmConfig {
     #[serde(skip)]
     pub serial_config: Option<SerialConfig>,
     pub memory_hotplug: Option<MemoryHotplugConfig>,
+    /// VFIO passthrough devices.
+    #[serde(default, rename = "vfio")]
+    pub vfio_devices: Vec<VfioDeviceConfig>,
 }
 
 /// A data structure that encapsulates the device configurations
@@ -123,6 +127,8 @@ pub struct VmResources {
     pub pmem: PmemBuilder,
     /// The memory hotplug configuration.
     pub memory_hotplug: Option<MemoryHotplugConfig>,
+    /// The VFIO passthrough devices.
+    pub vfio_devices: Vec<VfioDeviceConfig>,
     /// The optional Mmds data store.
     // This is initialised on demand (if ever used), so that we don't allocate it unless it's
     // actually used.
@@ -222,6 +228,10 @@ impl VmResources {
 
         if let Some(memory_hotplug_config) = vmm_config.memory_hotplug {
             resources.set_memory_hotplug_config(memory_hotplug_config)?;
+        }
+
+        for vfio_config in vmm_config.vfio_devices.into_iter() {
+            resources.add_vfio_device(vfio_config);
         }
 
         Ok(resources)
@@ -377,6 +387,14 @@ impl VmResources {
     pub fn build_pmem_device(&mut self, body: PmemConfig) -> Result<(), PmemConfigError> {
         let has_block_root = self.block.has_root_device();
         self.pmem.build(body, has_block_root)
+    }
+
+    /// Registers a VFIO passthrough device configuration.
+    ///
+    /// The actual device is not opened until the microVM starts, when guest
+    /// memory is available and a KVM VFIO file descriptor can be created.
+    pub fn add_vfio_device(&mut self, config: VfioDeviceConfig) {
+        self.vfio_devices.push(config);
     }
 
     /// Sets the memory hotplug configuration.
@@ -538,6 +556,7 @@ impl From<&VmResources> for VmmConfig {
             // serial_config is marked serde(skip) so that it doesnt end up in snapshots.
             serial_config: None,
             memory_hotplug: resources.memory_hotplug.clone(),
+            vfio_devices: resources.vfio_devices.clone(),
         }
     }
 }
