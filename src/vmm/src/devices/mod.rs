@@ -15,6 +15,8 @@ pub mod acpi;
 pub mod legacy;
 pub mod pci;
 pub mod pseudo;
+/// VFIO device passthrough.
+pub mod vfio;
 pub mod virtio;
 
 use log::error;
