@@ -451,6 +451,8 @@ impl Vmm {
             // serial_config is marked serde(skip) so that it doesnt end up in snapshots
             serial_config: None,
             memory_hotplug,
+            // VFIO devices are not tracked post-boot; the config is pre-boot only.
+            vfio_devices: Vec::new(),
         }
     }
 

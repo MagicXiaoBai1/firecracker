@@ -41,6 +41,7 @@ use crate::vmm_config::net::{
 use crate::vmm_config::pmem::{PmemConfig, PmemConfigError};
 use crate::vmm_config::serial::SerialConfig;
 use crate::vmm_config::snapshot::{CreateSnapshotParams, LoadSnapshotParams, SnapshotType};
+use crate::vmm_config::vfio::VfioDeviceConfig;
 use crate::vmm_config::vsock::{VsockConfigError, VsockDeviceConfig};
 use crate::vmm_config::{self, RateLimiterUpdate};
 
@@ -83,6 +84,8 @@ pub enum VmmAction {
     InsertBlockDevice(BlockDeviceConfig),
     /// Add a virtio-pmem device.
     InsertPmemDevice(PmemConfig),
+    /// Add a VFIO passthrough device.
+    InsertVfioDevice(VfioDeviceConfig),
     /// Add a new network interface config or update one that already exists using the
     /// `NetworkInterfaceConfig` as input. This action can only be called before the microVM has
     /// booted.
@@ -455,6 +458,7 @@ impl<'a> PrebootApiController<'a> {
             GetVmmVersion => Ok(VmmData::VmmVersion(self.instance_info.vmm_version.clone())),
             InsertBlockDevice(config) => self.insert_block_device(config),
             InsertPmemDevice(config) => self.insert_pmem_device(config),
+            InsertVfioDevice(config) => self.insert_vfio_device(config),
             InsertNetworkDevice(config) => self.insert_net_device(config),
             LoadSnapshot(config) => self
                 .load_snapshot(&config)
@@ -534,6 +538,12 @@ impl<'a> PrebootApiController<'a> {
             .build_pmem_device(cfg)
             .map(|()| VmmData::Empty)
             .map_err(VmmActionError::PmemDevice)
+    }
+
+    fn insert_vfio_device(&mut self, cfg: VfioDeviceConfig) -> Result<VmmData, VmmActionError> {
+        self.boot_path = true;
+        self.vm_resources.add_vfio_device(cfg);
+        Ok(VmmData::Empty)
     }
 
     fn set_balloon_device(&mut self, cfg: BalloonDeviceConfig) -> Result<VmmData, VmmActionError> {
@@ -802,6 +812,7 @@ impl RuntimeApiController {
             | ConfigureSerial(_)
             | InsertBlockDevice(_)
             | InsertPmemDevice(_)
+            | InsertVfioDevice(_)
             | InsertNetworkDevice(_)
             | LoadSnapshot(_)
             | PutCpuConfiguration(_)
