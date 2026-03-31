@@ -290,6 +290,17 @@ pub fn build_microvm_for_boot(
     device_manager.attach_vmgenid_device(&vm)?;
     device_manager.attach_vmclock_device(&vm)?;
 
+
+    debug!(
+        "build_vm.device_manager: {:?}",
+        device_manager
+    );
+
+    debug!(
+        "build_vm.device_manager.pci_devices.virtio_devices: {:#?}",
+        device_manager.pci_devices.virtio_devices
+    );
+
     #[cfg(target_arch = "aarch64")]
     if vcpus[0].kvm_vcpu.supports_pvtime() {
         setup_pvtime(&mut vm.resource_allocator(), &mut vcpus)?;
@@ -743,6 +754,18 @@ fn attach_balloon_device(
     // The device mutex mustn't be locked here otherwise it will deadlock.
     device_manager.attach_virtio_device(vm, id, balloon.clone(), cmdline, false)
 }
+
+#[allow(dead_code)]
+#[allow(unused_variables)]
+fn attach_vifo_pcie_device(
+    device_manager: &mut DeviceManager,
+    vm: &Arc<Vm>,
+    cmdline: &mut LoaderKernelCmdline,
+    event_manager: &mut EventManager,
+){
+    // TODO
+}
+
 
 #[cfg(test)]
 pub(crate) mod tests {

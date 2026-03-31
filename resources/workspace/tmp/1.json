@@ -1,0 +1,156 @@
+{ mmio_devices: MMIODeviceManager { virtio_devices: {}, boot_timer: None, rtc: Some(MMIODevice { resources: MMIODeviceInfo { addr: 1073745920, len: 4096, gsi: Some(3) }, inner: Mutex { data: RTCDevice(Rtc { lr: 0, offset: 0, mr: 0, imsc: 0, ris: 0, events: RTCDeviceMetrics { error_count: SharedIncMetric(0, 0), missed_read_count: SharedIncMetric(0, 0), missed_write_count: SharedIncMetric(0, 0) } }), poisoned: false, .. } }), serial: Some(MMIODevice { resources: MMIODeviceInfo { addr: 1073750016, len: 4096, gsi: Some(2) }, inner: Mutex { data: SerialWrapper { serial: Serial { baud_divisor_low: 12, baud_divisor_high: 0, interrupt_enable: 0, interrupt_identification: 1, line_control: 3, line_status: 96, modem_control: 8, modem_status: 176, scratch: 0, in_buffer: [], interrupt_evt: EventFdTrigger(EventFd { eventfd: File { fd: 38, path: "anon_inode:[eventfd]", read: true, write: true } }), events: SerialEventsWrapper { buffer_ready_event_fd: Some(EventFdTrigger(EventFd { eventfd: File { fd: 39, path: "anon_inode:[eventfd]", read: true, write: true } })) }, out: Stdout(Stdout { .. }) }, input: Some(Stdin { .. }) }, poisoned: false, .. } }) }, acpi_devices: ACPIDeviceManager { vmgenid: VmGenId { gen_id: 115894685489145701581471218333670092865, interrupt_evt: EventFdTrigger(EventFd { eventfd: File { fd: 31, path: "anon_inode:[eventfd]", read: true, write: true } }), guest_address: GuestAddress(2149580784), gsi: 0 }, vmclock: VmClock { guest_address: GuestAddress(2149572608), interrupt_evt: EventFdTrigger(EventFd { eventfd: File { fd: 32, path: "anon_inode:[eventfd]", read: true, write: true } }), gsi: 1, inner: vmclock_abi { magic: 1263289174, size: 4096, version: 1, counter_id: 255, time_type: 0, seq_count: 0, disruption_marker: 0, flags: 768, pad: [0, 0], clock_status: 0, leap_second_smearing_hint: 0, tai_offset_sec: 0, leap_indicator: 0, counter_period_shift: 0, counter_value: 0, counter_period_frac_sec: 0, counter_period_esterror_rate_frac_sec: 0, counter_period_maxerror_rate_frac_sec: 0, time_sec: 0, time_frac_sec: 0, time_esterror_nanosec: 0, time_maxerror_nanosec: 0, vm_generation_counter: 0 } } }, pci_devices: PciDevices { pci_segment: Some(PciSegment { id: 0, mmio_config_address: 1879048192, proximity_domain: 0, pci_devices_up: 0, pci_devices_down: 0, pci_irq_slots: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], start_of_mem32_area: 1073754112, end_of_mem32_area: 1879048191, start_of_mem64_area: 274877906944, end_of_mem64_area: 549755813887 }), virtio_devices: {(Net, "net1"): Mutex { data: VirtioPciDevice { id: "net1" }, poisoned: false, .. }, (Block, "rootfs"): Mutex { data: VirtioPciDevice { id: "rootfs" }, poisoned: false, .. }} } }
+{
+    mmio_devices: MMIODeviceManager {
+        virtio_devices: {},
+        boot_timer: None,
+        rtc: Some(MMIODevice {
+            resources: MMIODeviceInfo {
+                addr: 1073745920,
+                len: 4096,
+                gsi: Some(3)
+            },
+            inner: Mutex {
+                data: RTCDevice(Rtc {
+                    lr: 0,
+                    offset: 0,
+                    mr: 0,
+                    imsc: 0,
+                    ris: 0,
+                    events: RTCDeviceMetrics {
+                        error_count: SharedIncMetric(0, 0),
+                        missed_read_count: SharedIncMetric(0, 0),
+                        missed_write_count: SharedIncMetric(0, 0)
+                    }
+                }),
+                poisoned: false,
+                ..
+            }
+        }),
+        serial: Some(MMIODevice {
+            resources: MMIODeviceInfo {
+                addr: 1073750016,
+                len: 4096,
+                gsi: Some(2)
+            },
+            inner: Mutex {
+                data: SerialWrapper {
+                    serial: Serial {
+                        baud_divisor_low: 12,
+                        baud_divisor_high: 0,
+                        interrupt_enable: 0,
+                        interrupt_identification: 1,
+                        line_control: 3,
+                        line_status: 96,
+                        modem_control: 8,
+                        modem_status: 176,
+                        scratch: 0,
+                        in_buffer: [],
+                        interrupt_evt: EventFdTrigger(EventFd {
+                            eventfd: File {
+                                fd: 38,
+                                path: "anon_inode:[eventfd]",
+                                read: true,
+                                write: true
+                            }
+                        }),
+                        events: SerialEventsWrapper {
+                            buffer_ready_event_fd: Some(EventFdTrigger(EventFd {
+                                eventfd: File {
+                                    fd: 39,
+                                    path: "anon_inode:[eventfd]",
+                                    read: true,
+                                    write: true
+                                }
+                            }))
+                        },
+                        out: Stdout(Stdout { .. })
+                    },
+                    input: Some(Stdin { .. })
+                },
+                poisoned: false,
+                ..
+            }
+        })
+    },
+    acpi_devices: ACPIDeviceManager {
+        vmgenid: VmGenId {
+            gen_id: 115894685489145701581471218333670092865,
+            interrupt_evt: EventFdTrigger(EventFd {
+                eventfd: File {
+                    fd: 31,
+                    path: "anon_inode:[eventfd]",
+                    read: true,
+                    write: true
+                }
+            }),
+            guest_address: GuestAddress(2149580784),
+            gsi: 0
+        },
+        vmclock: VmClock {
+            guest_address: GuestAddress(2149572608),
+            interrupt_evt: EventFdTrigger(EventFd {
+                eventfd: File {
+                    fd: 32,
+                    path: "anon_inode:[eventfd]",
+                    read: true,
+                    write: true
+                }
+            }),
+            gsi: 1,
+            inner: vmclock_abi {
+                magic: 1263289174,
+                size: 4096,
+                version: 1,
+                counter_id: 255,
+                time_type: 0,
+                seq_count: 0,
+                disruption_marker: 0,
+                flags: 768,
+                pad: [0, 0],
+                clock_status: 0,
+                leap_second_smearing_hint: 0,
+                tai_offset_sec: 0,
+                leap_indicator: 0,
+                counter_period_shift: 0,
+                counter_value: 0,
+                counter_period_frac_sec: 0,
+                counter_period_esterror_rate_frac_sec: 0,
+                counter_period_maxerror_rate_frac_sec: 0,
+                time_sec: 0,
+                time_frac_sec: 0,
+                time_esterror_nanosec: 0,
+                time_maxerror_nanosec: 0,
+                vm_generation_counter: 0
+            }
+        }
+    },
+    pci_devices: PciDevices {
+        pci_segment: Some(PciSegment {
+            id: 0,
+            mmio_config_address: 1879048192,
+            proximity_domain: 0,
+            pci_devices_up: 0,
+            pci_devices_down: 0,
+            pci_irq_slots: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+            start_of_mem32_area: 1073754112,
+            end_of_mem32_area: 1879048191,
+            start_of_mem64_area: 274877906944,
+            end_of_mem64_area: 549755813887
+        }),
+        virtio_devices: {
+            (Net, "net1"): Mutex {
+                data: VirtioPciDevice { id: "net1" },
+                poisoned: false,
+                ..
+            },
+            (Block, "rootfs"): Mutex {
+                data: VirtioPciDevice { id: "rootfs" },
+                poisoned: false,
+                ..
+            }
+        }
+
+    }
+}
+
+{(Net, "net1"): Mutex { data: VirtioPciDevice { id: "net1" }, poisoned: false, .. }, (Block, "rootfs"): Mutex { data: VirtioPciDevice { id: "rootfs" }, poisoned: false, .. }}

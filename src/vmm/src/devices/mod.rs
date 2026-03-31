@@ -16,6 +16,7 @@ pub mod legacy;
 pub mod pci;
 pub mod pseudo;
 pub mod virtio;
+pub mod vfio;
 
 use log::error;
 

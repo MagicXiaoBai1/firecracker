@@ -12,8 +12,13 @@ bench = false
 default = []
 tracing = ["log-instrument"]
 gdb = ["arrayvec", "gdbstub", "gdbstub_arch"]
+## kvm = ["kvm-bindings", "kvm-ioctls", "vfio-ioctls/kvm"]
 
 [dependencies]
+
+vfio-bindings = { version = "0.6.0", default-features = false }
+vfio-ioctls = { version = "0.5.1", default-features = false }
+vfio_user = { version = "0.1.1", default-features = false }
 
 acpi_tables = { path = "../acpi-tables" }
 arrayvec = { version = "0.7.6", optional = true }

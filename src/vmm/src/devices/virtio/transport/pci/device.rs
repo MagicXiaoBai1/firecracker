@@ -254,7 +254,7 @@ pub enum VirtioPciDeviceError {
     /// Error creating MSI configuration: {0}
     Msi(#[from] InterruptError),
 }
-
+#[derive(Debug)] 
 pub struct VirtioPciDevice {
     id: String,
 
@@ -289,13 +289,13 @@ pub struct VirtioPciDevice {
     pub bar_address: u64,
 }
 
-impl Debug for VirtioPciDevice {
-    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
-        f.debug_struct("VirtioPciDevice")
-            .field("id", &self.id)
-            .finish()
-    }
-}
+// impl Debug for VirtioPciDevice {
+//     fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
+//         f.debug_struct("VirtioPciDevice")
+//             .field("id", &self.id)
+//             .finish()
+//     }
+// }
 
 impl VirtioPciDevice {
     fn pci_configuration(

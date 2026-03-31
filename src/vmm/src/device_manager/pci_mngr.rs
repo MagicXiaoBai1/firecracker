@@ -28,6 +28,7 @@ use crate::devices::virtio::rng::persist::{EntropyConstructorArgs, EntropyState}
 use crate::devices::virtio::transport::pci::device::{
     CAPABILITY_BAR_SIZE, VirtioPciDevice, VirtioPciDeviceError, VirtioPciDeviceState,
 };
+use crate::devices::vfio::pcie::vfio_device::VfioPciDeviceError;
 use crate::devices::virtio::vsock::persist::{
     VsockConstructorArgs, VsockState, VsockUdsConstructorArgs,
 };
