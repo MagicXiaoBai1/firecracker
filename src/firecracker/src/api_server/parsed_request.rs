@@ -281,6 +281,10 @@ pub(crate) fn method_to_error(method: Method) -> Result<ParsedRequest, RequestEr
             StatusCode::BadRequest,
             "Empty PATCH request.".to_string(),
         )),
+        Method::Delete => Err(RequestError::Generic(
+            StatusCode::BadRequest,
+            "Empty DELETE request.".to_string(),
+        )),
     }
 }
 

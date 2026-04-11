@@ -41,3 +41,9 @@ strip = "none"
 
 [profile.bench]
 strip = "debuginfo"
+
+[workspace.dependencies]
+vm-memory = "0.17.2"
+
+[patch.crates-io]
+linux-loader = { path = "resources/patches/linux-loader-0.13.2" }
