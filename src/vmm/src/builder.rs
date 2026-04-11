@@ -755,6 +755,19 @@ fn attach_balloon_device(
     device_manager.attach_virtio_device(vm, id, balloon.clone(), cmdline, false)
 }
 
+
+use vfio_ioctls::{VfioContainer, VfioDevice, VfioDeviceFd, VfioOps};
+pub use kvm_bindings::{
+    self, KVM_GUESTDBG_ENABLE, KVM_GUESTDBG_SINGLESTEP, KVM_IRQ_ROUTING_IRQCHIP,
+    KVM_IRQ_ROUTING_MSI, KVM_MEM_LOG_DIRTY_PAGES, KVM_MEM_READONLY, KVM_MSI_VALID_DEVID,
+    kvm_clock_data, kvm_create_device, kvm_create_device as CreateDevice,
+    kvm_device_attr as DeviceAttr, kvm_device_type_KVM_DEV_TYPE_VFIO, kvm_guest_debug,
+    kvm_irq_routing, kvm_irq_routing_entry, kvm_mp_state, kvm_run, kvm_userspace_memory_region,
+};
+use crate::vstate::memory::{
+    GuestMemory, GuestMemoryExtension, GuestMemoryMmap, GuestMemoryRegion, GuestMemoryState,
+    GuestRegionMmapExt, MemoryError,
+};
 #[allow(dead_code)]
 #[allow(unused_variables)]
 fn attach_vifo_pcie_device(
@@ -764,6 +777,119 @@ fn attach_vifo_pcie_device(
     event_manager: &mut EventManager,
 ){
     // TODO
+    // 
+
+    let vfio_name = "test_vfio";
+    debug!("add_vfio_device.vfio_name: {:?}", vfio_name);
+    let pci_segment_id = 0;
+    let device_path = "/sys/bus/pci/devices/0000:ba:02.0/";
+    debug!("add_vfio_device.pci_segment_id: {:?}  .device_path: {:?}", pci_segment_id, device_path);
+
+
+
+     let mut vfio_dev = kvm_create_device {
+            type_: kvm_device_type_KVM_DEV_TYPE_VFIO,
+            fd: 0,
+            flags: 0,
+        };
+    let device_fd = vm.fd().create_device(&mut vfio_dev).unwrap();
+    let passthrough_device = VfioDeviceFd::new_from_kvm(device_fd);
+
+    let dup = passthrough_device
+            .try_clone()
+            .unwrap();
+    
+    let vfio_container = VfioContainer::new(Some(Arc::new(dup))).unwrap();
+    let vfio_ops: Arc<dyn VfioOps> = Arc::new(vfio_container);
+
+    let vfio_device = VfioDevice::new(device_path.as_ref(), Arc::clone(&vfio_ops))
+        .unwrap();
+
+
+    let needs_dma_mapping = true; // NPU一定需要DMA
+    if needs_dma_mapping {
+        let dup = passthrough_device
+            .try_clone()
+            .unwrap();
+    
+        let vfio_container = VfioContainer::new(Some(Arc::new(dup))).unwrap();
+        // Register DMA mapping in IOMMU.
+        // Do not register virtio-mem regions, as they are handled directly by
+        // virtio-mem device itself.
+        for GuestRegionMmapExt { inner, .. } in vm.guest_memory().iter() {
+
+
+            // vfio_dma_map is unsound and ought to be marked as unsafe
+            #[allow(unused_unsafe)]
+            // SAFETY: GuestMemoryMmap guarantees that region points
+            // to len bytes of valid memory starting at as_ptr()
+            // that will only be freed with munmap().
+            unsafe {
+                    vfio_container.vfio_dma_map(
+                        inner.start_addr().0,
+                        inner.len(),
+                        inner.get_mmap().as_ptr() as u64,
+                    )
+                }.unwrap();
+        }
+        // TODO virtio_mem_device 
+    }
+
+    // let memory_manager = self.memory_manager.clone();
+
+    // let vfio_pci_device = VfioPciDevice::new(
+    //     vfio_name.clone(),
+    //     self.address_manager.vm.clone(),
+    //     vfio_device,
+    //     vfio_container,
+    //     self.msi_interrupt_manager.clone(),
+    //     legacy_interrupt_group,
+    //     device_cfg.iommu,
+    //     pci_device_bdf,
+    //     memory_manager.lock().unwrap().memory_slot_allocator(),
+    //     vm_migration::snapshot_from_id(self.snapshot.as_ref(), vfio_name.as_str()),
+    //     device_cfg.x_nv_gpudirect_clique,
+    //     device_cfg.path.clone(),
+    // )
+    // .map_err(DeviceManagerError::VfioPciCreate)?;
+
+    // let vfio_pci_device = Arc::new(Mutex::new(vfio_pci_device));
+
+    // let new_resources = self.add_pci_device(
+    //     vfio_pci_device.clone(),
+    //     vfio_pci_device.clone(),
+    //     pci_segment_id,
+    //     pci_device_bdf,
+    //     resources,
+    // )?;
+
+    // vfio_pci_device
+    //     .lock()
+    //     .unwrap()
+    //     .map_mmio_regions()
+    //     .map_err(DeviceManagerError::VfioMapRegion)?;
+
+    // for mmio_region in vfio_pci_device.lock().unwrap().mmio_regions() {
+    //     self.mmio_regions.lock().unwrap().push(mmio_region);
+    // }
+
+    // let mut node = device_node!(vfio_name, vfio_pci_device);
+
+    // // Update the device tree with correct resource information.
+    // node.resources = new_resources;
+    // node.pci_bdf = Some(pci_device_bdf);
+    // node.pci_device_handle = Some(PciDeviceHandle::Vfio(vfio_pci_device));
+
+    // self.device_tree
+    //     .lock()
+    //     .unwrap()
+    //     .insert(vfio_name.clone(), node);
+
+    // // Track device ID → guest BDF mapping for Generic Initiator resolution
+    // self.device_id_to_bdf
+    //     .insert(vfio_name.clone(), pci_device_bdf);
+
+    // Ok((pci_device_bdf, vfio_name))
 }
 
 
