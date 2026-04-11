@@ -224,7 +224,12 @@ pub fn build_microvm_for_boot(
             event_manager,
         )?;
     }
-
+    attach_vfio_pcie_device(
+        &mut device_manager,
+        &vm,
+        &mut boot_cmdline,
+        event_manager,
+    );
     attach_block_devices(
         &mut device_manager,
         &vm,
@@ -770,7 +775,7 @@ use crate::vstate::memory::{
 };
 #[allow(dead_code)]
 #[allow(unused_variables)]
-fn attach_vifo_pcie_device(
+fn attach_vfio_pcie_device(
     device_manager: &mut DeviceManager,
     vm: &Arc<Vm>,
     cmdline: &mut LoaderKernelCmdline,
@@ -782,7 +787,7 @@ fn attach_vifo_pcie_device(
     let vfio_name = "test_vfio";
     debug!("add_vfio_device.vfio_name: {:?}", vfio_name);
     let pci_segment_id = 0;
-    let device_path = "/sys/bus/pci/devices/0000:ba:02.0/";
+    let device_path = "/sys/bus/pci/devices/0000:ba:02.0";
     debug!("add_vfio_device.pci_segment_id: {:?}  .device_path: {:?}", pci_segment_id, device_path);
 
 
@@ -799,25 +804,26 @@ fn attach_vifo_pcie_device(
             .try_clone()
             .unwrap();
     
-    let vfio_container = VfioContainer::new(Some(Arc::new(dup))).unwrap();
-    let vfio_ops: Arc<dyn VfioOps> = Arc::new(vfio_container);
+    let vfio_container = Arc::new(VfioContainer::new(Some(Arc::new(dup))).unwrap());
+    let vfio_ops: Arc<dyn VfioOps> = vfio_container.clone();
 
     let vfio_device = VfioDevice::new(device_path.as_ref(), Arc::clone(&vfio_ops))
-        .unwrap();
+        .unwrap_or_else(|e| {
+        debug!("VFIO 设备初始化失败: {:?}", e);
+        panic!("初始化终止")
+    });
 
 
     let needs_dma_mapping = true; // NPU一定需要DMA
     if needs_dma_mapping {
-        let dup = passthrough_device
-            .try_clone()
-            .unwrap();
-    
-        let vfio_container = VfioContainer::new(Some(Arc::new(dup))).unwrap();
-        // Register DMA mapping in IOMMU.
+           // Register DMA mapping in IOMMU using the already initialized vfio_container.
         // Do not register virtio-mem regions, as they are handled directly by
         // virtio-mem device itself.
         for GuestRegionMmapExt { inner, .. } in vm.guest_memory().iter() {
-
+            debug!(
+                "VFIO DMA 映射原始参数: iova={:#x}, len={:#x}, ptr={:#x}",
+                inner.start_addr().0, inner.len(), inner.get_mmap().as_ptr() as u64
+            );
 
             // vfio_dma_map is unsound and ought to be marked as unsafe
             #[allow(unused_unsafe)]
@@ -830,7 +836,10 @@ fn attach_vifo_pcie_device(
                         inner.len(),
                         inner.get_mmap().as_ptr() as u64,
                     )
-                }.unwrap();
+                }.unwrap_or_else(|e| {
+                debug!("VFIO 设备DMA 映射失败: {:?}", e);
+                panic!("初始化终止")
+                });
         }
         // TODO virtio_mem_device 
     }
