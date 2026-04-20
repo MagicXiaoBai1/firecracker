@@ -318,6 +318,7 @@ impl VirtioPciDevice {
             ),
         };
 
+
         PciConfiguration::new_type0(
             VIRTIO_PCI_VENDOR_ID,
             pci_device_id,

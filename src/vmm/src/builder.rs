@@ -773,6 +773,8 @@ use crate::vstate::memory::{
     GuestMemory, GuestMemoryExtension, GuestMemoryMmap, GuestMemoryRegion, GuestMemoryState,
     GuestRegionMmapExt, MemoryError,
 };
+use crate::devices::vfio::pcie::vfio_device::VfioPciDevice;
+
 #[allow(dead_code)]
 #[allow(unused_variables)]
 fn attach_vfio_pcie_device(
@@ -782,7 +784,16 @@ fn attach_vfio_pcie_device(
     event_manager: &mut EventManager,
 ){
     // TODO
-    // 
+    // 1. 创建 vfio_container、vfio_group
+    // 2. 配置设备访问物理内存的DMA
+
+    // 3. 创建设备
+
+    // 4. 将设备添加到pci总线ECAM空间
+    // 5. 将设备添bar添加到总线上
+    // 6. 配置中断
+    // -. 操作event_manager
+
 
     let vfio_name = "test_vfio";
     debug!("add_vfio_device.vfio_name: {:?}", vfio_name);
@@ -844,61 +855,8 @@ fn attach_vfio_pcie_device(
         // TODO virtio_mem_device 
     }
 
-    // let memory_manager = self.memory_manager.clone();
-
-    // let vfio_pci_device = VfioPciDevice::new(
-    //     vfio_name.clone(),
-    //     self.address_manager.vm.clone(),
-    //     vfio_device,
-    //     vfio_container,
-    //     self.msi_interrupt_manager.clone(),
-    //     legacy_interrupt_group,
-    //     device_cfg.iommu,
-    //     pci_device_bdf,
-    //     memory_manager.lock().unwrap().memory_slot_allocator(),
-    //     vm_migration::snapshot_from_id(self.snapshot.as_ref(), vfio_name.as_str()),
-    //     device_cfg.x_nv_gpudirect_clique,
-    //     device_cfg.path.clone(),
-    // )
-    // .map_err(DeviceManagerError::VfioPciCreate)?;
-
-    // let vfio_pci_device = Arc::new(Mutex::new(vfio_pci_device));
-
-    // let new_resources = self.add_pci_device(
-    //     vfio_pci_device.clone(),
-    //     vfio_pci_device.clone(),
-    //     pci_segment_id,
-    //     pci_device_bdf,
-    //     resources,
-    // )?;
-
-    // vfio_pci_device
-    //     .lock()
-    //     .unwrap()
-    //     .map_mmio_regions()
-    //     .map_err(DeviceManagerError::VfioMapRegion)?;
-
-    // for mmio_region in vfio_pci_device.lock().unwrap().mmio_regions() {
-    //     self.mmio_regions.lock().unwrap().push(mmio_region);
-    // }
-
-    // let mut node = device_node!(vfio_name, vfio_pci_device);
-
-    // // Update the device tree with correct resource information.
-    // node.resources = new_resources;
-    // node.pci_bdf = Some(pci_device_bdf);
-    // node.pci_device_handle = Some(PciDeviceHandle::Vfio(vfio_pci_device));
-
-    // self.device_tree
-    //     .lock()
-    //     .unwrap()
-    //     .insert(vfio_name.clone(), node);
-
-    // // Track device ID → guest BDF mapping for Generic Initiator resolution
-    // self.device_id_to_bdf
-    //     .insert(vfio_name.clone(), pci_device_bdf);
-
-    // Ok((pci_device_bdf, vfio_name))
+    // 3. 创建设备
+    // let vfio_pci_device = VfioPciDevice::new(vfio_device, vfio_container);
 }
 
 

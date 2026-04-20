@@ -8,6 +8,7 @@
 use std::sync::{Arc, Mutex};
 
 use byteorder::{ByteOrder, LittleEndian};
+use log::debug;
 use pci::{PciCapabilityId, PciClassCode, PciSubclass};
 use serde::{Deserialize, Serialize};
 
@@ -103,6 +104,7 @@ impl PciConfiguration {
         subsystem_id: u16,
         msix_config: Option<Arc<Mutex<MsixConfig>>>,
     ) -> Self {
+        debug!("vendor_id: {}, device_id: {}, revision_id: {}", vendor_id, device_id, revision_id);
         let mut registers = [0u32; NUM_CONFIGURATION_REGISTERS];
         let mut writable_bits = [0u32; NUM_CONFIGURATION_REGISTERS];
         registers[0] = (u32::from(device_id) << 16) | u32::from(vendor_id);
