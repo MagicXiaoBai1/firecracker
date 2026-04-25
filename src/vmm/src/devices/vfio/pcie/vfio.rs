@@ -11,6 +11,7 @@ use thiserror::Error;
 use crate::pci::configuration::{PciCapability, PciConfiguration, PciConfigurationState};
 use crate::vstate::interrupts::{InterruptError, MsixVectorGroup};
 use crate::pci::msix::{MsixCap, MsixConfig, MsixConfigState};
+use crate::vstate::vm::VmCommon;
 use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU32, AtomicUsize, Ordering};
 use crate::pci::{BarReprogrammingParams, DeviceRelocationError, PciDevice};
 use pci::{
@@ -98,12 +99,12 @@ pub(crate) trait Vfio: Send + Sync {
         unimplemented!()
     }
 }
-struct VfioDeviceWrapper {
+pub(crate) struct VfioDeviceWrapper {
     device: Arc<VfioDevice>,
 }
 
 impl VfioDeviceWrapper {
-    fn new(device: Arc<VfioDevice>) -> Self {
+    pub fn new(device: Arc<VfioDevice>) -> Self {
         Self { device }
     }
 }
@@ -143,8 +144,6 @@ impl Vfio for VfioDeviceWrapper {
 #[derive(Debug)]
 pub struct VfioInterruptMsix {
     msix_config: Arc<Mutex<MsixConfig>>,
-    config_vector: Arc<AtomicU16>,
-    queues_vectors: Arc<Mutex<Vec<u16>>>,
     vectors: Arc<MsixVectorGroup>,
 }
 
@@ -171,15 +170,58 @@ impl fmt::Debug for VfioCommon {
 impl VfioCommon {
     pub(crate) fn new(
         subclass: &dyn PciSubclass,
-    ){
+        vfio_wrapper: Arc<dyn Vfio>
+    ) -> Self{
         // 1. 初始化 PciConfiguration
         let configuration = PciConfiguration::new_type0(0, 0, 0, 
             PciClassCode::Other, subclass, 0, 0, None);  // guest的vendor等id的请求会直通到vfio fd，不用PciConfiguration对象处理
-        
+        let virtio_interrupt = Option::None;
+        // TODO FIRST 新建VfioInterruptMsix，研究vfio_wrapper传递
+        Self{
+            configuration,
+            virtio_interrupt,
+            vfio_wrapper
+        }
+    }
 
 
+    pub fn write_config_register(
+        &mut self,
+        reg_idx: usize,
+        offset: u64,
+        data: &[u8],
+    ) -> Option<Arc<Barrier>> {
+        // TODO
+        // 1. 判断是否在写bar寄存器：如果是就写PciConfiguration对象，然后返回
+        // 2. 判断是否在使能misx or msi
+        // 3. 读写vfio fd(vfio_wrapper)
+        // 4. 根据MSE bit的值处理 bar reprogram（好像什么都不用做）因为bar reprogram（移动bar空间的HPA）不会发生
+        None
+    }
 
+    pub fn read_config_register(&mut self, reg_idx: usize) -> u32 {
+        // TODO 
+        // 1. 判断是否在读bar寄存器：如果是就读PciConfiguration对象，然后返回
+        // 2. 判断是否在读misx or msi能力
+        // 3. mask multi-function bit
+        // 4. 读vfio fd(vfio_wrapper)
+        // 5. 处理mask和patch
+        0
+    }
 
+    pub fn read_bar(&mut self, _base: u64, offset: u64, data: &mut [u8]) {
+        // TODO
+        // 1. 判断是否在读msix table
+        // 1. 是：读vmm内存中的msix table -> 调用 virtio_interrupt
+        // 2. 否：读vfio fd(vfio_wrapper)
+    }
+
+    pub fn write_bar(&mut self, _base: u64, offset: u64, data: &[u8]) -> Option<Arc<Barrier>> {
+        // TODO
+        // 1. 判断是否在写msix table
+        // 1. 是：写vmm内存中的msix table -> 调用 virtio_interrupt
+        // 2. 否：写vfio fd(vfio_wrapper)
+        None
     }
 
     pub fn detect_bar_reprogramming(
@@ -188,5 +230,41 @@ impl VfioCommon {
         data: &[u8],
     ) -> Option<BarReprogrammingParams> {
         self.configuration.detect_bar_reprogramming(reg_idx, data)
+    }
+
+    pub(crate) fn allocate_bars_in_vfio(
+        &mut self,
+        vm: VmCommon,
+        // TODO
+    ) {
+        // TODO
+        // 调用vfio_wrapper获得设备可直通的bar空间的mmap
+
+    }
+
+    pub(crate) fn set_vfio_bar_in_kvm(
+        &mut self,
+        vm: VmCommon,
+        // TODO
+    ) {
+        // TODO
+        // 将设备可直通的bar空间的mmap的HPA 配置给guest的GPA map HPA
+
+    }
+
+
+    fn is_access_bar_register(reg_idx: usize, offset: u64, data: &[u8]) -> bool{
+        // TODO 判断guest mmio的地址是否为pcie配置空间的bar寄存器
+        false
+    }
+
+    fn is_access_misx_capabilities(reg_idx: usize, offset: u64, data: &[u8]) -> bool{
+        // TODO 判断guest mmio的地址是否为pcie配置空间的misx能力
+        false
+    }
+
+    fn is_access_msix_vector_register(base: u64, offset: u64) -> bool{
+        // TODO 判断guest mmio的地址是否为pcie bar 空间的msix_vector
+        false
     }
 }

@@ -8,8 +8,11 @@ use std::sync::{Arc, Mutex};
 
 use event_manager::{MutEventSubscriber, SubscriberOps};
 use log::{debug, error, warn};
+use pci::PciBdf;
 use serde::{Deserialize, Serialize};
-
+use vfio_ioctls::{
+    VfioContainer, VfioDevice, VfioIrq, VfioRegionInfoCap, VfioRegionSparseMmapArea,
+};
 use super::persist::MmdsState;
 use crate::devices::pci::PciSegment;
 use crate::devices::virtio::balloon::Balloon;
@@ -28,7 +31,8 @@ use crate::devices::virtio::rng::persist::{EntropyConstructorArgs, EntropyState}
 use crate::devices::virtio::transport::pci::device::{
     CAPABILITY_BAR_SIZE, VirtioPciDevice, VirtioPciDeviceError, VirtioPciDeviceState,
 };
-use crate::devices::vfio::pcie::vfio_device::VfioPciDeviceError;
+use crate::devices::vfio::pcie::vfio_device::{VfioPciDevice, VfioPciDeviceError};
+
 use crate::devices::virtio::vsock::persist::{
     VsockConstructorArgs, VsockState, VsockUdsConstructorArgs,
 };
@@ -41,6 +45,7 @@ use crate::vmm_config::mmds::MmdsConfigError;
 use crate::vstate::bus::BusError;
 use crate::vstate::interrupts::InterruptError;
 use crate::vstate::memory::GuestMemoryMmap;
+use crate::vstate::vm;
 use crate::{EventManager, Vm};
 
 #[derive(Debug, Default)]
@@ -49,6 +54,8 @@ pub struct PciDevices {
     pub pci_segment: Option<PciSegment>,
     /// All VirtIO PCI devices of the system
     pub virtio_devices: HashMap<(VirtioDeviceType, String), Arc<Mutex<VirtioPciDevice>>>,
+    /// All VFIO PCIe devices, keys PciBdf
+    pub vfio_devices: HashMap<u32, Arc<Mutex<VfioPciDevice>>>
 }
 
 #[derive(Debug, thiserror::Error, displaydoc::Display)]
@@ -158,6 +165,48 @@ impl PciDevices {
             .lock()
             .expect("Poisoned lock")
             .register_notification_ioevent(vm)?;
+
+        Ok(())
+    }
+
+    #[warn(dead_code)]
+    pub(crate) fn attach_pci_vfio_device(
+        &mut self,
+        vm: &Arc<Vm>,
+        device: VfioDevice,
+        vfio_container: Arc<VfioContainer>,
+    ) -> Result<(), PciManagerError> {
+        // We should only be reaching this point if PCI is enabled
+        let pci_segment = self.pci_segment.as_ref().unwrap();
+        let pci_device_bdf = pci_segment.next_device_bdf()?;
+        debug!("Allocating BDF: {pci_device_bdf:?} for device");
+
+
+        // Allocate one MSI vector per queue, plus one for configuration
+        let msix_num = 0;
+        let msix_vectors = Vm::create_msix_group(vm.clone(), msix_num)?;
+
+        // Create the transport
+        let mut vfio_device = VfioPciDevice::new(
+            pci_device_bdf,
+            device,
+            vfio_container,
+            vm,
+        );
+
+        // Allocate bars
+
+        let vfio_device = Arc::new(Mutex::new(vfio_device));
+        pci_segment
+            .pci_bus
+            .lock()
+            .expect("Poisoned lock")
+            .add_device(pci_device_bdf.device() as u32, vfio_device.clone());
+
+        self.vfio_devices
+            .insert(pci_device_bdf.into(), vfio_device.clone());
+
+        // Self::register_bars_with_bus(vm, &virtio_device)?;    // 配置bar region的vm exit访问
 
         Ok(())
     }

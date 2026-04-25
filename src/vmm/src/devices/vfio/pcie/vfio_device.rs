@@ -6,6 +6,7 @@ use std::io::{ErrorKind, Write};
 use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU32, AtomicUsize, Ordering};
 use std::sync::{Arc, Barrier, Mutex};
 use crate::utils::u64_to_usize;
+use crate::{EventManager, Vm};
 
 
 
@@ -32,7 +33,7 @@ use crate::vstate::interrupts::{InterruptError, MsixVectorGroup};
 use crate::vstate::memory::GuestMemoryMmap;
 use crate::vstate::bus::BusDevice;
 use vfio_ioctls::{VfioContainer, VfioDevice, VfioDeviceFd, VfioOps};
-use crate::devices::vfio::pcie::vfio::{Vfio, VfioCommon};
+use crate::devices::vfio::pcie::vfio::{Vfio, VfioCommon, VfioDeviceWrapper};
 
 
 
@@ -54,13 +55,14 @@ pub struct VfioPciDevice {
     // vfio设备共性部分
     common: VfioCommon,
 
-    // Guest memory
-    memory: GuestMemoryMmap,
+    // virtual machine
+    vm: Arc<Vm>,
 
     // 资源
     vfio_container: Arc<VfioContainer>,
     vfio_device: Arc<VfioDevice>,
 }
+
 impl fmt::Debug for VfioPciDevice {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("VfioPciDevice")
@@ -68,70 +70,54 @@ impl fmt::Debug for VfioPciDevice {
             .field("pci_device_bdf", &self.pci_device_bdf)
             .field("common", &self.common)
             // 跳过未实现 Debug 的字段
-            .field("memory", &self.memory)
             .finish()
     }
 }
 
-// impl VfioPciDevice {
-//     pub fn new(vfio_device: &VfioDevice, vfio_container: &VfioContainer) -> Self {
-//         // 1. 获取设备的BDF
-//         // 3. 创建设备
-//         Self {
-//             id: format!("vfio-pci-{}", pci_device_bdf),
-//             pci_device_bdf,
-//             configuration,
-//             virtio_interrupt: None,
-//             memory: GuestMemoryMmap::default(),
-//         }
-//     }
-// }
+#[derive(Copy, Clone)]
+enum PciVfioSubclass {
+    VfioSubclass = 0xff,
+}
+impl PciSubclass for PciVfioSubclass {
+    fn get_register_value(&self) -> u8 {
+        *self as u8
+    }
+}
+impl VfioPciDevice {
+    pub fn new(
+        pci_device_bdf: PciBdf,
+        vfio_device: VfioDevice,
+        vfio_container: Arc<VfioContainer>,
+        vm: &Arc<Vm>,
+    ) -> Self {
+        let vfio_device = Arc::new(vfio_device);
+        let vfio_wrapper = VfioDeviceWrapper::new(Arc::clone(&vfio_device));
+
+        Self {
+            id: format!("vfio-pci-{}", pci_device_bdf),
+            pci_device_bdf: pci_device_bdf,
+            common: VfioCommon::new(&PciVfioSubclass::VfioSubclass,  Arc::new(vfio_wrapper) as Arc<dyn Vfio>),
+            vm: Arc::clone(&vm),
+            vfio_container: vfio_container,
+            vfio_device: vfio_device,
+        }
+    }
+}
 
 impl PciDevice for VfioPciDevice {
+
     fn write_config_register(
         &mut self,
         reg_idx: usize,
         offset: u64,
         data: &[u8],
     ) -> Option<Arc<Barrier>> {
-        // Handle the special case where the capability VIRTIO_PCI_CAP_PCI_CFG
-        // is accessed. This capability has a special meaning as it allows the
-        // guest to access other capabilities without mapping the PCI BAR.
-        // let base = reg_idx * 4;
-        // if base + u64_to_usize(offset) >= self.cap_pci_cfg_info.offset
-        //     && base + u64_to_usize(offset) + data.len()
-        //         <= self.cap_pci_cfg_info.offset + self.cap_pci_cfg_info.cap.bytes().len()
-        // {
-        //     let offset = base + u64_to_usize(offset) - self.cap_pci_cfg_info.offset;
-        //     self.write_cap_pci_cfg(offset, data)
-        // } else {
-        //     self.configuration
-        //         .write_config_register(reg_idx, offset, data);
-        //     None
-        // }
+        // TODO 打印日志 + 调用 VfioCommon
         None
     }
 
     fn read_config_register(&mut self, reg_idx: usize) -> u32 {
-        // Handle the special case where the capability VIRTIO_PCI_CAP_PCI_CFG
-        // is accessed. This capability has a special meaning as it allows the
-        // guest to access other capabilities without mapping the PCI BAR.
-        // let base = reg_idx * 4;
-        // if base >= self.cap_pci_cfg_info.offset
-        //     && base + 4 <= self.cap_pci_cfg_info.offset + self.cap_pci_cfg_info.cap.bytes().len()
-        // {
-        //     let offset = base - self.cap_pci_cfg_info.offset;
-        //     let mut data = [0u8; 4];
-        //     let len = u32::from(self.cap_pci_cfg_info.cap.cap.length) as usize;
-        //     if len <= 4 {
-        //         self.read_cap_pci_cfg(offset, &mut data[..len]);
-        //         u32::from_le_bytes(data)
-        //     } else {
-        //         0
-        //     }
-        // } else {
-        //     self.configuration.read_reg(reg_idx)
-        // }
+        // TODO 打印日志 + 调用 VfioCommon
         0
     }
 
@@ -188,10 +174,11 @@ impl PciDevice for VfioPciDevice {
     }
 
     fn read_bar(&mut self, _base: u64, offset: u64, data: &mut [u8]) {
+        // TODO 打印日志 + 调用 VfioCommon
     }
 
     fn write_bar(&mut self, _base: u64, offset: u64, data: &[u8]) -> Option<Arc<Barrier>> {
-     
+        // TODO 打印日志 + 调用 VfioCommon
         None
     }
 }

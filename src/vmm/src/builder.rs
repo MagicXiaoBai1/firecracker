@@ -815,7 +815,7 @@ fn attach_vfio_pcie_device(
             .try_clone()
             .unwrap();
     
-    let vfio_container = Arc::new(VfioContainer::new(Some(Arc::new(dup))).unwrap());
+    let vfio_container: Arc<VfioContainer> = Arc::new(VfioContainer::new(Some(Arc::new(dup))).unwrap());
     let vfio_ops: Arc<dyn VfioOps> = vfio_container.clone();
 
     let vfio_device = VfioDevice::new(device_path.as_ref(), Arc::clone(&vfio_ops))
@@ -856,7 +856,8 @@ fn attach_vfio_pcie_device(
     }
 
     // 3. 创建设备
-    // let vfio_pci_device = VfioPciDevice::new(vfio_device, vfio_container);
+    device_manager.pci_devices.attach_pci_vfio_device(vm, vfio_device, vfio_container);
+
 }
 
 
