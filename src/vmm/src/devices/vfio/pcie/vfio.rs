@@ -169,13 +169,28 @@ impl fmt::Debug for VfioCommon {
 
 impl VfioCommon {
     pub(crate) fn new(
+        id :u32,
         subclass: &dyn PciSubclass,
-        vfio_wrapper: Arc<dyn Vfio>
+        vfio_wrapper: Arc<dyn Vfio>,
+        msix_vectors: MsixVectorGroup
     ) -> Self{
         // 1. 初始化 PciConfiguration
         let configuration = PciConfiguration::new_type0(0, 0, 0, 
             PciClassCode::Other, subclass, 0, 0, None);  // guest的vendor等id的请求会直通到vfio fd，不用PciConfiguration对象处理
-        let virtio_interrupt = Option::None;
+
+        let msix_vectors = Arc::new(msix_vectors);
+        let msix_config = Arc::new(Mutex::new(MsixConfig::new(
+            msix_vectors.clone(),
+            id,
+        )));
+
+        let virtio_interrupt: Option<Arc<VfioInterruptMsix>> = Option::Some(Arc::new(
+            VfioInterruptMsix{
+                msix_config: msix_config, 
+                vectors: msix_vectors
+            }
+        ));
+
         // TODO FIRST 新建VfioInterruptMsix，研究vfio_wrapper传递
         Self{
             configuration,
