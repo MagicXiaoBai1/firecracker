@@ -147,11 +147,15 @@ pub struct VfioInterruptMsix {
     vectors: Arc<MsixVectorGroup>,
 }
 
+const MSIX_TABLE_BAR_OFFSET: u64 = 0x8000;
+const MSIX_TABLE_SIZE: u64 = 0x40000;
+const MSIX_PBA_BAR_OFFSET: u64 = 0x48000;
+const MSIX_PBA_SIZE: u64 = 0x800;
+
 
 pub(crate) struct VfioCommon {
     pub(crate) configuration: PciConfiguration,
-    // TODO pub(crate) mmio_regions: Vec<MmioRegion>,
-    // TODO 中断
+    // Reserved for BAR-backed MSI-X emulation path.
     virtio_interrupt: Option<Arc<VfioInterruptMsix>>,
     pub(crate) vfio_wrapper: Arc<dyn Vfio>,
     // TODO pub(crate) patches: HashMap<usize, ConfigPatch>,
@@ -206,36 +210,89 @@ impl VfioCommon {
         offset: u64,
         data: &[u8],
     ) -> Option<Arc<Barrier>> {
-        // TODO
         // 1. 判断是否在写bar寄存器：如果是就写PciConfiguration对象，然后返回
         // 2. 判断是否在使能misx or msi
         // 3. 读写vfio fd(vfio_wrapper)
         // 4. 根据MSE bit的值处理 bar reprogram（好像什么都不用做）因为bar reprogram（移动bar空间的HPA）不会发生
+        if Self::is_access_bar_register(reg_idx, offset, data)
+            || self.is_access_misx_capabilities(reg_idx, offset, data)
+        {
+            self.configuration.write_config_register(reg_idx, offset, data);
+            return None;
+        }
+
+        let cfg_offset = (reg_idx * 4 + crate::utils::u64_to_usize(offset)) as u32;
+        self.vfio_wrapper.write_config(cfg_offset, data);
         None
     }
 
     pub fn read_config_register(&mut self, reg_idx: usize) -> u32 {
-        // TODO 
         // 1. 判断是否在读bar寄存器：如果是就读PciConfiguration对象，然后返回
         // 2. 判断是否在读misx or msi能力
         // 3. mask multi-function bit
         // 4. 读vfio fd(vfio_wrapper)
         // 5. 处理mask和patch
-        0
+        let mut value = if Self::is_access_bar_register(reg_idx, 0, &[])
+            || self.is_access_misx_capabilities(reg_idx, 0, &[])
+        {
+            self.configuration.read_reg(reg_idx)
+        } else {
+            self.vfio_wrapper.read_config_dword((reg_idx * 4) as u32)
+        };
+
+        // Header Type register has the multi-function bit as bit 23 in DWORD #3.
+        // We currently expose a single function in the virtual topology.
+        if reg_idx == 3 {
+            value &= !(1u32 << 23);
+        }
+
+        value
     }
 
     pub fn read_bar(&mut self, _base: u64, offset: u64, data: &mut [u8]) {
-        // TODO
         // 1. 判断是否在读msix table
         // 1. 是：读vmm内存中的msix table -> 调用 virtio_interrupt
         // 2. 否：读vfio fd(vfio_wrapper)
+        if self.virtio_interrupt.is_some() && Self::is_access_msix_vector_register(_base, offset) {
+            if let Some(irq) = &self.virtio_interrupt {
+                let mut msix = irq.msix_config.lock().expect("Poisoned lock");
+                if (MSIX_TABLE_BAR_OFFSET..MSIX_TABLE_BAR_OFFSET + MSIX_TABLE_SIZE).contains(&offset)
+                {
+                    msix.read_table(offset - MSIX_TABLE_BAR_OFFSET, data);
+                    return;
+                }
+                if (MSIX_PBA_BAR_OFFSET..MSIX_PBA_BAR_OFFSET + MSIX_PBA_SIZE).contains(&offset) {
+                    msix.read_pba(offset - MSIX_PBA_BAR_OFFSET, data);
+                    return;
+                }
+            }
+        }
+
+        self.vfio_wrapper
+            .region_read(VFIO_PCI_BAR0_REGION_INDEX, offset, data);
     }
 
     pub fn write_bar(&mut self, _base: u64, offset: u64, data: &[u8]) -> Option<Arc<Barrier>> {
-        // TODO
         // 1. 判断是否在写msix table
         // 1. 是：写vmm内存中的msix table -> 调用 virtio_interrupt
         // 2. 否：写vfio fd(vfio_wrapper)
+        if self.virtio_interrupt.is_some() && Self::is_access_msix_vector_register(_base, offset) {
+            if let Some(irq) = &self.virtio_interrupt {
+                let mut msix = irq.msix_config.lock().expect("Poisoned lock");
+                if (MSIX_TABLE_BAR_OFFSET..MSIX_TABLE_BAR_OFFSET + MSIX_TABLE_SIZE).contains(&offset)
+                {
+                    msix.write_table(offset - MSIX_TABLE_BAR_OFFSET, data);
+                    return None;
+                }
+                if (MSIX_PBA_BAR_OFFSET..MSIX_PBA_BAR_OFFSET + MSIX_PBA_SIZE).contains(&offset) {
+                    msix.write_pba(offset - MSIX_PBA_BAR_OFFSET, data);
+                    return None;
+                }
+            }
+        }
+
+        self.vfio_wrapper
+            .region_write(VFIO_PCI_BAR0_REGION_INDEX, offset, data);
         None
     }
 
@@ -249,37 +306,72 @@ impl VfioCommon {
 
     pub(crate) fn allocate_bars_in_vfio(
         &mut self,
-        vm: VmCommon,
-        // TODO
+        _vm: VmCommon,
     ) {
-        // TODO
         // 调用vfio_wrapper获得设备可直通的bar空间的mmap
-
+        info!("allocate_bars_in_vfio is not implemented yet");
     }
 
     pub(crate) fn set_vfio_bar_in_kvm(
         &mut self,
-        vm: VmCommon,
-        // TODO
+        _vm: VmCommon,
     ) {
-        // TODO
         // 将设备可直通的bar空间的mmap的HPA 配置给guest的GPA map HPA
-
+        info!("set_vfio_bar_in_kvm is not implemented yet");
     }
 
 
     fn is_access_bar_register(reg_idx: usize, offset: u64, data: &[u8]) -> bool{
-        // TODO 判断guest mmio的地址是否为pcie配置空间的bar寄存器
-        false
+        if !(4..10).contains(&reg_idx) {
+            return false;
+        }
+
+        crate::utils::u64_to_usize(offset) + data.len() <= 4
     }
 
-    fn is_access_misx_capabilities(reg_idx: usize, offset: u64, data: &[u8]) -> bool{
-        // TODO 判断guest mmio的地址是否为pcie配置空间的misx能力
-        false
+    fn is_access_misx_capabilities(&self, reg_idx: usize, offset: u64, data: &[u8]) -> bool{
+        let Some(msix_cap_offset) = self.find_msix_cap_offset() else {
+            return false;
+        };
+
+        let access_start = reg_idx * 4 + crate::utils::u64_to_usize(offset);
+        let access_end = access_start + cmp::max(data.len(), 1);
+
+        let cap_start = msix_cap_offset;
+        // Capability header (2) + Message Control (2) + Table (4) + PBA (4)
+        let cap_end = cap_start + 12;
+
+        access_start < cap_end && cap_start < access_end
     }
 
-    fn is_access_msix_vector_register(base: u64, offset: u64) -> bool{
-        // TODO 判断guest mmio的地址是否为pcie bar 空间的msix_vector
-        false
+    fn find_msix_cap_offset(&self) -> Option<usize> {
+        let read_cfg_byte = |cfg: &PciConfiguration, byte_off: usize| -> u8 {
+            let reg = cfg.read_reg(byte_off / 4);
+            ((reg >> ((byte_off % 4) * 8)) & 0xff) as u8
+        };
+
+        let mut cap_ptr = usize::from(read_cfg_byte(&self.configuration, 0x34));
+        let mut guard = 0usize;
+
+        while cap_ptr >= 0x40 && cap_ptr < 0x100 && guard < 48 {
+            let cap_id = read_cfg_byte(&self.configuration, cap_ptr);
+            if cap_id == PciCapabilityId::MsiX as u8 {
+                return Some(cap_ptr);
+            }
+
+            let next = usize::from(read_cfg_byte(&self.configuration, cap_ptr + 1));
+            if next == 0 || next == cap_ptr {
+                break;
+            }
+            cap_ptr = next;
+            guard += 1;
+        }
+
+        None
+    }
+
+    fn is_access_msix_vector_register(_base: u64, offset: u64) -> bool{
+        (MSIX_TABLE_BAR_OFFSET..MSIX_TABLE_BAR_OFFSET + MSIX_TABLE_SIZE).contains(&offset)
+            || (MSIX_PBA_BAR_OFFSET..MSIX_PBA_BAR_OFFSET + MSIX_PBA_SIZE).contains(&offset)
     }
 }
