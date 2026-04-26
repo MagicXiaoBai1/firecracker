@@ -293,6 +293,40 @@ impl PciConfiguration {
             | (u64::from(self.bars[bar_idx + 1].addr) << 32)
     }
 
+    /// Finds the BAR index whose base address matches `base`.
+    ///
+    /// Returns the BAR register index in `[0, NUM_BAR_REGS)`.
+    pub fn find_bar_by_base(&self, base: u64) -> Option<usize> {
+        let mut bar_idx = 0usize;
+
+        while bar_idx < NUM_BAR_REGS {
+            if !self.bars[bar_idx].used {
+                bar_idx += 1;
+                continue;
+            }
+
+            let reg_idx = BAR0_REG + bar_idx;
+            let low = u64::from(self.bars[bar_idx].addr & self.writable_bits[reg_idx]);
+            let is_64 = (self.registers[reg_idx] & 0x6) == 0x4
+                && bar_idx + 1 < NUM_BAR_REGS
+                && self.bars[bar_idx + 1].used;
+
+            let bar_base = if is_64 {
+                low | (u64::from(self.bars[bar_idx + 1].addr) << 32)
+            } else {
+                low
+            };
+
+            if bar_base == base {
+                return Some(bar_idx);
+            }
+
+            bar_idx += if is_64 { 2 } else { 1 };
+        }
+
+        None
+    }
+
     /// Adds the capability `cap_data` to the list of capabilities.
     ///
     /// `cap_data` should not include the two-byte PCI capability header (type, next).
