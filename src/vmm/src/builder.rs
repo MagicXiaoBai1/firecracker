@@ -229,7 +229,7 @@ pub fn build_microvm_for_boot(
         &vm,
         &mut boot_cmdline,
         event_manager,
-    );
+    )?;
     attach_block_devices(
         &mut device_manager,
         &vm,
@@ -775,14 +775,13 @@ use crate::vstate::memory::{
 };
 use crate::devices::vfio::pcie::vfio_device::VfioPciDevice;
 
-#[allow(dead_code)]
 #[allow(unused_variables)]
 fn attach_vfio_pcie_device(
     device_manager: &mut DeviceManager,
     vm: &Arc<Vm>,
     cmdline: &mut LoaderKernelCmdline,
     event_manager: &mut EventManager,
-){
+) -> Result<(), StartMicrovmError>{
     // TODO
     // 1. 创建 vfio_container、vfio_group
     // 2. 配置设备访问物理内存的DMA
@@ -856,9 +855,10 @@ fn attach_vfio_pcie_device(
     }
 
     // 3. 创建设备
-    device_manager.pci_devices.attach_pci_vfio_device(vm, vfio_device, vfio_container);
-
+    device_manager.pci_devices.attach_pci_vfio_device(vm, vfio_device, vfio_container)?;
+    Ok(())
 }
+
 
 
 #[cfg(test)]

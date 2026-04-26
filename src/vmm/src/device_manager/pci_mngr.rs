@@ -169,7 +169,6 @@ impl PciDevices {
         Ok(())
     }
 
-    #[warn(dead_code)]
     pub(crate) fn attach_pci_vfio_device(
         &mut self,
         vm: &Arc<Vm>,
@@ -187,26 +186,28 @@ impl PciDevices {
         let msix_vectors = Vm::create_msix_group(vm.clone(), msix_num)?;
 
         // Create the transport
-        let mut vfio_device = VfioPciDevice::new(
+        let vfio_device = VfioPciDevice::new(
             pci_device_bdf,
             device,
             vfio_container,
             vm,
+            msix_vectors
         );
+        let vfio_device = Arc::new(Mutex::new(vfio_device));
 
         // Allocate bars
 
-        let vfio_device = Arc::new(Mutex::new(vfio_device));
+        // 向mgr注册devices
+        //     vm exit 时访问pcie配置空间
         pci_segment
             .pci_bus
             .lock()
             .expect("Poisoned lock")
             .add_device(pci_device_bdf.device() as u32, vfio_device.clone());
-
+        //     vm exit 加入device mgr
         self.vfio_devices
             .insert(pci_device_bdf.into(), vfio_device.clone());
 
-        // Self::register_bars_with_bus(vm, &virtio_device)?;    // 配置bar region的vm exit访问
 
         Ok(())
     }
