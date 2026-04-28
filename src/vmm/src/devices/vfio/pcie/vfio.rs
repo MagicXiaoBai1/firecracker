@@ -1,5 +1,6 @@
 
 use std::fmt;
+use super::configuration::VfioPcieConfiguration;
 use vfio_bindings::bindings::vfio::*;
 use vfio_ioctls::{
     VfioContainer, VfioDevice, VfioIrq, VfioRegionInfoCap, VfioRegionSparseMmapArea,
@@ -8,7 +9,6 @@ use vmm_sys_util::eventfd::EventFd;
 use std::sync::{Arc, Barrier, Mutex};
 use log::{error, info, warn};
 use thiserror::Error;
-use crate::pci::configuration::{PciCapability, PciConfiguration, PciConfigurationState};
 use crate::vstate::interrupts::{InterruptError, MsixVectorGroup};
 use crate::pci::msix::{MsixCap, MsixConfig, MsixConfigState};
 use crate::vstate::vm::VmCommon;
@@ -155,7 +155,7 @@ const PCI_CONFIG_CAPABILITY_PTR_MASK: u8 = 0xfc;
 const MSIX_TABLE_ENTRY_SIZE: u64 = 16;
 
 pub(crate) struct VfioCommon {
-    pub(crate) configuration: PciConfiguration,
+    pub(crate) configuration: VfioPcieConfiguration,
     // Reserved for BAR-backed MSI-X emulation path.
     virtio_interrupt: Option<Arc<VfioInterruptMsix>>,
     pub(crate) vfio_wrapper: Arc<dyn Vfio>,
@@ -175,13 +175,12 @@ impl fmt::Debug for VfioCommon {
 impl VfioCommon {
     pub(crate) fn new(
         id :u32,
-        subclass: &dyn PciSubclass,
+        _subclass: &dyn PciSubclass,
         vfio_wrapper: Arc<dyn Vfio>,
         msix_vectors: MsixVectorGroup
     ) -> Self{
-        // 1. 初始化 PciConfiguration
-        let configuration = PciConfiguration::new_type0(0, 0, 0, 
-            PciClassCode::Other, subclass, 0, 0, None);  // guest的vendor等id的请求会直通到vfio fd，不用PciConfiguration对象处理
+        // Keep a VFIO-local config cache for BAR/MSI-X control paths.
+        let configuration = VfioPcieConfiguration::new();
 
         let msix_vectors = Arc::new(msix_vectors);
         let msix_config = Arc::new(Mutex::new(MsixConfig::new(
