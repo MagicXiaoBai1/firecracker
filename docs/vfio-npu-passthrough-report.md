@@ -131,7 +131,7 @@
 3. 替换 `unwrap/panic` 为结构化错误并挂到 `StartMicrovmError`。
 4. 增加关键日志字段：设备标识、IOMMU group、BDF、region 概览、DMA map 结果。
 
-### Phase B: 配置空间通路（先做）
+### Phase B: 配置空间通路（先做）(doing now)
 
 1. 在 `VfioPciDevice` 中实现：
    - `read_config_register` -> 调 `VfioCommon.read_config_register`
@@ -141,7 +141,7 @@
    - BAR 寄存器：先与 `PciConfiguration` 对齐，保证 BAR 尺寸探测和寄存器语义
 3. 明确并实现“透传字段白名单/黑名单”规则（例如 command/status/header type 的掩码策略）。
 
-### Phase C: MMIO BAR 数据面（核心）
+### Phase C: MMIO BAR 数据面（核心）(doing now)
 
 1. 枚举 VFIO region，识别可 mmap/可 MMIO 的 BAR。
 2. 为每个 BAR 申请 guest GPA（先固定策略到 mmio64 allocator）。
@@ -199,3 +199,45 @@
 1. 打通 `VfioPciDevice` 到 `VfioCommon` 的配置空间与 BAR 透传。
 2. 在 `attach_pci_vfio_device` 里补 BAR 注册到 `mmio_bus` 的路径。
 3. 先不碰 MSI-X，仅保留占位与日志。
+
+
+已经完成框架切换的第一步，接下来我会跑一次错误检查，修掉这次改动引入的编译问题，确保你可以在这个基础上继续填功能。
+
+Checked configuration.rs, vfio.rs, mod.rs, no problems found
+
+我还会做一次最小范围编译验证（只检查 vmm crate），确认新框架没有破坏当前工程构建；如果有错误我会继续修到可编译。
+
+结论已经明确并且代码框架已落好：你的判断在 MVP 阶段是正确的。下面我会给出简要架构判断依据、这次实际改动点、以及当前框架边界（哪些还需要你下一步补齐）。你的判断是正确的，而且对当前阶段是更稳妥的路线。
+
+核心原因是：现有 PciConfiguration 带有明显 virtio 假设，不适合作为 VFIO 的配置基座，尤其是 BAR 与 MSI-X 语义。
+比如在 configuration.rs:259 的 add_pci_bar 逻辑里，默认 BAR 使用模型是围绕 virtio 设计的；而 VFIO 需要更“透传设备真实配置 + 选择性拦截”的模型。
+
+已按“正确”路径落了可编译的代码框架：
+
+新增独立配置结构
+新文件：configuration.rs
+新结构定义：configuration.rs:26
+已包含 MVP 需要的基础能力：
+配置空间寄存器缓存与按 byte/word/dword 写入：configuration.rs:47
+BAR base 查找：configuration.rs:104
+BAR 重编程检测接口骨架：configuration.rs:127
+MSI-X capability 索引预留接口（set/get）
+切换 VfioCommon 到新配置结构
+VfioCommon.configuration 已从 PciConfiguration 切换到 VfioPcieConfiguration：
+vfio.rs:157
+vfio.rs:158
+构造流程已改为创建新结构：
+vfio.rs:183
+模块导出
+在 VFIO PCIe 模块里新增导出：
+mod.rs:3
+验证结果：
+
+已执行 cargo check -p vmm，编译通过。
+当前仅有项目里已有的若干 unused import 警告，无新增编译错误阻塞。
+当前框架边界（你下一步要填的功能）：
+
+用 VFIO config region 初始化并持续同步本地 config cache（尤其 BAR 寄存器与 mask）。
+完整补齐 64-bit BAR 成对语义与 size-probe 行为（现在是 MVP 占位）。
+把 MSI-X table/PBA 的 capability 解析结果回填到新结构（替代对旧配置对象的隐式依赖）。
+建立 base -> region index 显式映射，逐步去掉 BAR0 fallback。
