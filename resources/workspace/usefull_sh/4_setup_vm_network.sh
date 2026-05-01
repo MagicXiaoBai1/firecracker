@@ -1,5 +1,5 @@
-API_SOCKET="/firecracker/tmp/firecracker_test0.socket"
-TAP_DEV="tap0"
+API_SOCKET="/home/yunfei/firecracker/resources/workspace/tmp/firecracker_test0.socket"
+TAP_DEV="tap11"
 
 
 # The IP address of a guest is derived from its MAC address with

@@ -1,4 +1,4 @@
-API_SOCKET="/firecracker/tmp/firecracker_test0.socket"
+API_SOCKET="/home/yunfei/firecracker/resources/workspace/tmp/firecracker_test0.socket"
 sleep 0.015s
 
 # Start microVM

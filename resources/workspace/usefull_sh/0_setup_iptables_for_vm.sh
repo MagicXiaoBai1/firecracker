@@ -1,5 +1,5 @@
-TAP_DEV="tap0"
-TAP_IP="172.16.0.1"
+TAP_DEV="tap11"
+TAP_IP="172.29.125.1"
 MASK_SHORT="/30"
 
 # Setup network interface

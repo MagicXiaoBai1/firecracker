@@ -1,5 +1,5 @@
-API_SOCKET="/firecracker/tmp/firecracker_test0.socket"
-LOGFILE="/firecracker/tmp/firecracker.log"
+API_SOCKET="/home/yunfei/firecracker/resources/workspace/tmp/firecracker_test0.socket"
+LOGFILE="/home/yunfei/firecracker/resources/workspace/tmp/firecracker.log"
 
 # Set log file
 curl -X PUT --unix-socket "${API_SOCKET}" \

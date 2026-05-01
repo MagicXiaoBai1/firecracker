@@ -1,9 +1,8 @@
 API_SOCKET="/home/yunfei/firecracker/resources/workspace/tmp/firecracker_test0.socket"
 
-# ROOTFS="/home/yunfei/cloud-hypervisor/workspace/openeuler-rootfs.ext4"
-# KERNEL="/home/yunfei/kernel/vmlinux.bin"
-KERNEL="/home/yunfei/firecracker/resources/workspace/guest/vmlinux-6.1.155"
-ROOTFS="/home/yunfei/firecracker/resources/workspace/guest/ubuntu-24.04.ext4"
+WWROOTFS="/home/yunfei/cloud-hypervisor/workspace/openeuler-rootfs.ext4"
+KERNEL="/home/yunfei/kernel/vmlinux.bin"
+
 
 
 
