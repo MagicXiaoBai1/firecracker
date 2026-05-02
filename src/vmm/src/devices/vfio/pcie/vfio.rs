@@ -150,10 +150,6 @@ pub struct VfioInterruptMsix {
 const PCI_ROM_EXP_BAR_INDEX: usize = 12;
 // PCI config register size (4 bytes).
 const PCI_CONFIG_REGISTER_SIZE: usize = 4;
-const PCI_CONFIG_CAPABILITY_OFFSET: u32 = 0x34;
-const PCI_CONFIG_CAPABILITY_PTR_MASK: u8 = 0xfc;
-const MSIX_TABLE_ENTRY_SIZE: u64 = 16;
-
 pub(crate) struct VfioCommon {
     pub(crate) configuration: VfioPcieConfiguration,
     // Reserved for BAR-backed MSI-X emulation path.
@@ -214,8 +210,10 @@ impl VfioCommon {
         // 2. 判断是否在使能misx or msi
         // 3. 读写vfio fd(vfio_wrapper)
         // 4. 根据MSE bit的值处理 bar reprogram（好像什么都不用做）因为bar reprogram（移动bar空间的HPA）不会发生
-        if Self::is_access_bar_register(reg_idx, offset, data)
-            || self.is_access_misx_capabilities(reg_idx, offset, data)
+        if VfioPcieConfiguration::is_access_bar_register(reg_idx, offset, data)
+            || self
+                .configuration
+                .is_access_msix_capabilities(reg_idx, offset, data, self.vfio_wrapper.as_ref())
         {
             self.configuration.write_config_register(reg_idx, offset, data);
             return None;
@@ -232,8 +230,10 @@ impl VfioCommon {
         // 3. mask multi-function bit
         // 4. 读vfio fd(vfio_wrapper)
         // 5. 处理mask和patch
-        let mut value = if Self::is_access_bar_register(reg_idx, 0, &[])
-            || self.is_access_misx_capabilities(reg_idx, 0, &[])
+        let mut value = if VfioPcieConfiguration::is_access_bar_register(reg_idx, 0, &[])
+            || self
+                .configuration
+                .is_access_msix_capabilities(reg_idx, 0, &[], self.vfio_wrapper.as_ref())
         {
             self.configuration.read_reg(reg_idx)
         } else {
@@ -254,17 +254,26 @@ impl VfioCommon {
         // 1. 是：读vmm内存中的msix table -> 调用 virtio_interrupt
         // 2. 否：读vfio fd(vfio_wrapper)
         if self.virtio_interrupt.is_some() {
-            if let Some((table_offset, _table_size, _pba_offset, _pba_size)) = self.msix_layout_for_bar(base) {
-                if let Some(irq) = &self.virtio_interrupt {
-                    let msix = irq.msix_config.lock().expect("Poisoned lock");
-                    if self.is_access_msix_vector_register(base, offset) {
+            if let Some((table_offset, _table_size, pba_offset, pba_size)) =
+                self.configuration.msix_layout_for_bar(self.vfio_wrapper.as_ref(), base)
+            {
+                let access_msix_vector = self
+                    .configuration
+                    .is_access_msix_vector_register(self.vfio_wrapper.as_ref(), base, offset);
+
+                if access_msix_vector {
+                    if let Some(irq) = &self.virtio_interrupt {
+                        let msix = irq.msix_config.lock().expect("Poisoned lock");
                         if let Some(msix_offset) = offset.checked_sub(table_offset) {
                             msix.read_table(msix_offset, data);
                             return;
                         }
-                        if let Some(pba_offset) = self.msix_pba_relative_offset(base, offset) {
-                            msix.read_pba(pba_offset, data);
-                            return;
+
+                        if let Some(pba_offset) = offset.checked_sub(pba_offset) {
+                            if pba_offset < pba_size {
+                                msix.read_pba(pba_offset, data);
+                                return;
+                            }
                         }
                     }
                 }
@@ -285,17 +294,26 @@ impl VfioCommon {
         // 1. 是：写vmm内存中的msix table -> 调用 virtio_interrupt
         // 2. 否：写vfio fd(vfio_wrapper)
         if self.virtio_interrupt.is_some() {
-            if let Some((table_offset, _table_size, _pba_offset, _pba_size)) = self.msix_layout_for_bar(base) {
-                if let Some(irq) = &self.virtio_interrupt {
-                    let mut msix = irq.msix_config.lock().expect("Poisoned lock");
-                    if self.is_access_msix_vector_register(base, offset) {
+            if let Some((table_offset, _table_size, pba_offset, pba_size)) =
+                self.configuration.msix_layout_for_bar(self.vfio_wrapper.as_ref(), base)
+            {
+                let access_msix_vector = self
+                    .configuration
+                    .is_access_msix_vector_register(self.vfio_wrapper.as_ref(), base, offset);
+
+                if access_msix_vector {
+                    if let Some(irq) = &self.virtio_interrupt {
+                        let mut msix = irq.msix_config.lock().expect("Poisoned lock");
                         if let Some(msix_offset) = offset.checked_sub(table_offset) {
                             msix.write_table(msix_offset, data);
                             return None;
                         }
-                        if let Some(pba_offset) = self.msix_pba_relative_offset(base, offset) {
-                            msix.write_pba(pba_offset, data);
-                            return None;
+
+                        if let Some(pba_offset) = offset.checked_sub(pba_offset) {
+                            if pba_offset < pba_size {
+                                msix.write_pba(pba_offset, data);
+                                return None;
+                            }
                         }
                     }
                 }
@@ -336,115 +354,9 @@ impl VfioCommon {
         info!("set_vfio_bar_in_kvm is not implemented yet");
     }
 
-
-    fn is_access_bar_register(reg_idx: usize, offset: u64, data: &[u8]) -> bool{
-        if !(4..10).contains(&reg_idx) && reg_idx != PCI_ROM_EXP_BAR_INDEX {
-            return false;
-        }
-        
-
-        crate::utils::u64_to_usize(offset) + data.len() <= 4
-    }
-
-    fn is_access_misx_capabilities(&self, reg_idx: usize, offset: u64, data: &[u8]) -> bool{
-        let Some(msix_cap_offset) = self.find_msix_cap_offset() else {
-            return false;
-        };
-
-        let access_start = reg_idx * 4 + crate::utils::u64_to_usize(offset);
-        let access_end = access_start + core::cmp::max(data.len(), 1);
-
-        // Cloud Hypervisor only treats the first MSI-X capability dword
-        // (cap ID + next pointer + message control) as the control register.
-        // Table/PBA location dwords are handled separately.
-        let cap_start = msix_cap_offset;
-        let cap_end = cap_start + 4;
-
-        access_start < cap_end && cap_start < access_end
-    }
-
-    fn find_msix_cap_offset(&self) -> Option<usize> {
-        let mut cap_ptr = self
-            .vfio_wrapper
-            .read_config_byte(PCI_CONFIG_CAPABILITY_OFFSET)
-            & PCI_CONFIG_CAPABILITY_PTR_MASK;
-        let mut guard = 0usize;
-
-        while cap_ptr != 0 && guard < 48 {
-            let cap_id = self.vfio_wrapper.read_config_byte(cap_ptr.into());
-            if cap_id == PciCapabilityId::MsiX as u8 {
-                return Some(usize::from(cap_ptr));
-            }
-
-            let next = self
-                .vfio_wrapper
-                .read_config_byte((cap_ptr + 1).into())
-                & PCI_CONFIG_CAPABILITY_PTR_MASK;
-            if next == 0 || next == cap_ptr {
-                break;
-            }
-            cap_ptr = next;
-            guard += 1;
-        }
-
-        None
-    }
-
-    fn is_access_msix_vector_register(&self, base: u64, offset: u64) -> bool {
-        let Some((table_offset, table_size, pba_offset, pba_size)) = self.msix_layout_for_bar(base) else {
-            return false;
-        };
-
-        let table_hit = table_offset
-            .checked_add(table_size)
-            .map(|end| (table_offset..end).contains(&offset))
-            .unwrap_or(false);
-        let pba_hit = pba_offset
-            .checked_add(pba_size)
-            .map(|end| (pba_offset..end).contains(&offset))
-            .unwrap_or(false);
-
-        table_hit || pba_hit
-    }
-
-    fn bar_index_from_base(&self, base: u64) -> Option<u32> {
-        self.configuration.find_bar_by_base(base).map(|idx| idx as u32)
-    }
-
     fn vfio_region_index_from_base(&self, base: u64) -> Option<u32> {
-        self.bar_index_from_base(base)
+        self.configuration.find_bar_by_base(base).map(|idx| idx as u32)
             .map(|bar_idx| VFIO_PCI_BAR0_REGION_INDEX + bar_idx)
     }
 
-    fn msix_layout_for_bar(&self, base: u64) -> Option<(u64, u64, u64, u64)> {
-        let bar_index = self.bar_index_from_base(base)?;
-        let cap_off = self.find_msix_cap_offset()? as u32;
-
-        let msg_ctl = self.vfio_wrapper.read_config_word(cap_off + 2);
-        let table = self.vfio_wrapper.read_config_dword(cap_off + 4);
-        let pba = self.vfio_wrapper.read_config_dword(cap_off + 8);
-
-        let table_bir = table & 0x7;
-        let pba_bir = pba & 0x7;
-        if bar_index != table_bir && bar_index != pba_bir {
-            return None;
-        }
-
-        let table_offset = u64::from(table & 0xffff_fff8);
-        let pba_offset = u64::from(pba & 0xffff_fff8);
-        let table_entries = u64::from((msg_ctl & 0x07ff) + 1);
-        let table_size = table_entries * MSIX_TABLE_ENTRY_SIZE;
-        let pba_size = table_entries.div_ceil(64) * 8;
-
-        Some((table_offset, table_size, pba_offset, pba_size))
-    }
-
-    fn msix_pba_relative_offset(&self, base: u64, offset: u64) -> Option<u64> {
-        let ( _table_offset, _table_size, pba_offset, pba_size) = self.msix_layout_for_bar(base)?;
-        let pba_end = pba_offset.checked_add(pba_size)?;
-        if !(pba_offset..pba_end).contains(&offset) {
-            return None;
-        }
-        offset.checked_sub(pba_offset)
-    }
 }

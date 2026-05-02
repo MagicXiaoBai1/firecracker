@@ -5,11 +5,16 @@ use byteorder::{ByteOrder, LittleEndian};
 
 use crate::pci::BarReprogrammingParams;
 use crate::utils::u64_to_usize;
+use super::vfio::Vfio;
+use pci::PciCapabilityId;
 
 const NUM_CONFIGURATION_REGISTERS: usize = 1024;
 const NUM_BAR_REGS: usize = 6;
 const BAR0_REG: usize = 4;
 const BAR_MEM_ADDR_MASK: u32 = 0xffff_fff0;
+const PCI_CONFIG_CAPABILITY_OFFSET: u32 = 0x34;
+const PCI_CONFIG_CAPABILITY_PTR_MASK: u8 = 0xfc;
+const MSIX_TABLE_ENTRY_SIZE: u64 = 16;
 
 #[derive(Debug, Default, Clone, Copy)]
 struct VfioBar {
@@ -79,6 +84,14 @@ impl VfioPcieConfiguration {
         }
     }
 
+    pub(crate) fn is_access_bar_register(reg_idx: usize, offset: u64, data: &[u8]) -> bool {
+        if !(4..10).contains(&reg_idx) && reg_idx != 12 {
+            return false;
+        }
+
+        u64_to_usize(offset) + data.len() <= 4
+    }
+
     pub(crate) fn set_msix_cap_reg_idx(&mut self, reg_idx: usize) {
         self.msix_cap_reg_idx = Some(reg_idx);
     }
@@ -119,6 +132,104 @@ impl VfioPcieConfiguration {
             }
 
             bar_idx += 1;
+        }
+
+        None
+    }
+
+    pub(crate) fn is_access_msix_capabilities(
+        &mut self,
+        reg_idx: usize,
+        offset: u64,
+        data: &[u8],
+        vfio: &dyn Vfio,
+    ) -> bool {
+        let Some(msix_cap_offset) = self.find_msix_cap_offset(vfio) else {
+            return false;
+        };
+
+        let access_start = reg_idx * 4 + u64_to_usize(offset);
+        let access_end = access_start + core::cmp::max(data.len(), 1);
+
+        let cap_start = msix_cap_offset;
+        let cap_end = cap_start + 4;
+
+        access_start < cap_end && cap_start < access_end
+    }
+
+    pub(crate) fn is_access_msix_vector_register(
+        &mut self,
+        vfio: &dyn Vfio,
+        base: u64,
+        offset: u64,
+    ) -> bool {
+        let Some((table_offset, table_size, pba_offset, pba_size)) =
+            self.msix_layout_for_bar(vfio, base)
+        else {
+            return false;
+        };
+
+        let table_hit = table_offset
+            .checked_add(table_size)
+            .map(|end| (table_offset..end).contains(&offset))
+            .unwrap_or(false);
+        let pba_hit = pba_offset
+            .checked_add(pba_size)
+            .map(|end| (pba_offset..end).contains(&offset))
+            .unwrap_or(false);
+
+        table_hit || pba_hit
+    }
+
+    pub(crate) fn msix_layout_for_bar(
+        &mut self,
+        vfio: &dyn Vfio,
+        base: u64,
+    ) -> Option<(u64, u64, u64, u64)> {
+        let bar_index = self.find_bar_by_base(base)? as u32;
+        let cap_off = self.find_msix_cap_offset(vfio)? as u32;
+
+        let msg_ctl = vfio.read_config_word(cap_off + 2);
+        let table = vfio.read_config_dword(cap_off + 4);
+        let pba = vfio.read_config_dword(cap_off + 8);
+
+        let table_bir = table & 0x7;
+        let pba_bir = pba & 0x7;
+        if bar_index != table_bir && bar_index != pba_bir {
+            return None;
+        }
+
+        let table_offset = u64::from(table & 0xffff_fff8);
+        let pba_offset = u64::from(pba & 0xffff_fff8);
+        let table_entries = u64::from((msg_ctl & 0x07ff) + 1);
+        let table_size = table_entries * MSIX_TABLE_ENTRY_SIZE;
+        let pba_size = table_entries.div_ceil(64) * 8;
+
+        Some((table_offset, table_size, pba_offset, pba_size))
+    }
+
+    fn find_msix_cap_offset(&mut self, vfio: &dyn Vfio) -> Option<usize> {
+        if let Some(cached_offset) = self.msix_cap_reg_idx {
+            return Some(cached_offset);
+        }
+
+        let mut cap_ptr = vfio.read_config_byte(PCI_CONFIG_CAPABILITY_OFFSET) & PCI_CONFIG_CAPABILITY_PTR_MASK;
+        let mut guard = 0usize;
+
+        while cap_ptr != 0 && guard < 48 {
+            let cap_id = vfio.read_config_byte(cap_ptr.into());
+            if cap_id == PciCapabilityId::MsiX as u8 {
+                let cap_offset = usize::from(cap_ptr);
+                self.msix_cap_reg_idx = Some(cap_offset);
+                return Some(cap_offset);
+            }
+
+            let next = vfio.read_config_byte((cap_ptr + 1).into()) & PCI_CONFIG_CAPABILITY_PTR_MASK;
+            if next == 0 || next == cap_ptr {
+                break;
+            }
+            cap_ptr = next;
+            guard += 1;
         }
 
         None
