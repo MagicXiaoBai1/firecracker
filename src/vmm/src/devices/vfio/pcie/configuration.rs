@@ -1,12 +1,18 @@
 // Copyright 2025 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+use std::fmt;
+use std::sync::Arc;
+
 use byteorder::{ByteOrder, LittleEndian};
 
-use crate::pci::BarReprogrammingParams;
 use crate::utils::u64_to_usize;
-use super::vfio::Vfio;
+use super::mmio_mgr::VfioMmioEngine;
+use super::vfio::{Vfio};
+use super::msix::VfioInterruptEngine;
 use pci::PciCapabilityId;
+use crate::vstate::interrupts::MsixVectorGroup;
+use vfio_bindings::bindings::vfio::VFIO_PCI_BAR0_REGION_INDEX;
 
 const NUM_CONFIGURATION_REGISTERS: usize = 1024;
 const NUM_BAR_REGS: usize = 6;
@@ -17,32 +23,78 @@ const PCI_CONFIG_CAPABILITY_PTR_MASK: u8 = 0xfc;
 const MSIX_TABLE_ENTRY_SIZE: u64 = 16;
 
 #[derive(Debug, Default, Clone, Copy)]
-struct VfioBar {
-    addr: u32,
-    size_mask: u32,
-    used: bool,
+pub(crate) struct VfioBarRegionInfo {
+    pub(crate) addr: u32,
+    pub(crate) size_mask: u32,
+    pub(crate) used: bool,
 }
 
 /// VFIO specific PCIe configuration cache.
 ///
 /// This is intentionally independent from the generic `PciConfiguration` because VFIO
 /// passthrough needs a different ownership model over config/BAR/MSI-X fields.
-#[derive(Debug)]
 pub(crate) struct VfioPcieConfiguration {
     registers: [u32; NUM_CONFIGURATION_REGISTERS],
     writable_bits: [u32; NUM_CONFIGURATION_REGISTERS],
-    bars: [VfioBar; NUM_BAR_REGS],
+    bar_region_info: [VfioBarRegionInfo; NUM_BAR_REGS],
     msix_cap_reg_idx: Option<usize>,
+    pub(crate) vfio_wrapper: Arc<dyn Vfio>,
+}
+
+impl fmt::Debug for VfioPcieConfiguration {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("VfioPcieConfiguration")
+            .field("registers_len", &self.registers.len())
+            .field("writable_bits_len", &self.writable_bits.len())
+            .field("bar_region_info", &self.bar_region_info)
+            .field("msix_cap_reg_idx", &self.msix_cap_reg_idx)
+            .finish()
+    }
 }
 
 impl VfioPcieConfiguration {
-    pub(crate) fn new() -> Self {
+    pub(crate) fn new(vfio_wrapper: Arc<dyn Vfio>) -> Self {
         Self {
             registers: [0u32; NUM_CONFIGURATION_REGISTERS],
             writable_bits: [0u32; NUM_CONFIGURATION_REGISTERS],
-            bars: [VfioBar::default(); NUM_BAR_REGS],
+            bar_region_info: [VfioBarRegionInfo::default(); NUM_BAR_REGS],
             msix_cap_reg_idx: None,
+            vfio_wrapper,
         }
+    }
+
+    pub(crate) fn create_vfio_mmio_engine(&self) -> VfioMmioEngine {
+        VfioMmioEngine::new()
+    }
+
+    pub(crate) fn create_vfio_interrupt_engine(
+        &self,
+        id: u32,
+        msix_vectors: MsixVectorGroup,
+    ) -> VfioInterruptEngine {
+        VfioInterruptEngine::new(self.vfio_wrapper.clone(), id, msix_vectors)
+    }
+
+    pub(crate) fn compute_bar_region_info(&mut self, vfio: &dyn Vfio) -> [VfioBarRegionInfo; NUM_BAR_REGS] {
+        let mut bar_idx = 0usize;
+        while bar_idx < NUM_BAR_REGS {
+            let reg_idx = BAR0_REG + bar_idx;
+            let addr = vfio.read_config_dword((reg_idx * 4) as u32);
+            self.bar_region_info[bar_idx].addr = addr;
+            self.bar_region_info[bar_idx].used = addr != 0;
+            self.bar_region_info[bar_idx].size_mask = BAR_MEM_ADDR_MASK;
+            bar_idx += 1;
+        }
+
+        self.bar_region_info
+    }
+
+    pub(crate) fn bar_region_info(&self) -> [VfioBarRegionInfo; NUM_BAR_REGS] {
+        self.bar_region_info
+    }
+
+    pub(crate) fn writable_mask(&self, reg_idx: usize) -> u32 {
+        self.writable_bits.get(reg_idx).copied().unwrap_or(0)
     }
 
     pub(crate) fn read_reg(&self, reg_idx: usize) -> u32 {
@@ -79,8 +131,8 @@ impl VfioPcieConfiguration {
 
         if (BAR0_REG..BAR0_REG + NUM_BAR_REGS).contains(&reg_idx) {
             let bar_idx = reg_idx - BAR0_REG;
-            self.bars[bar_idx].addr = reg;
-            self.bars[bar_idx].used = true;
+            self.bar_region_info[bar_idx].addr = reg;
+            self.bar_region_info[bar_idx].used = true;
         }
     }
 
@@ -102,8 +154,8 @@ impl VfioPcieConfiguration {
 
     pub(crate) fn set_bar_size_mask(&mut self, bar_idx: usize, size_mask: u32) {
         if bar_idx < NUM_BAR_REGS {
-            self.bars[bar_idx].size_mask = size_mask;
-            self.bars[bar_idx].used = true;
+            self.bar_region_info[bar_idx].size_mask = size_mask;
+            self.bar_region_info[bar_idx].used = true;
         }
     }
 
@@ -117,7 +169,7 @@ impl VfioPcieConfiguration {
     pub(crate) fn find_bar_by_base(&self, base: u64) -> Option<usize> {
         let mut bar_idx = 0usize;
         while bar_idx < NUM_BAR_REGS {
-            if !self.bars[bar_idx].used {
+            if !self.bar_region_info[bar_idx].used {
                 bar_idx += 1;
                 continue;
             }
@@ -125,7 +177,7 @@ impl VfioPcieConfiguration {
             let reg_idx = BAR0_REG + bar_idx;
             let addr_mask = self.writable_bits[reg_idx];
             let mask = if addr_mask == 0 { BAR_MEM_ADDR_MASK } else { addr_mask };
-            let bar_base = u64::from(self.bars[bar_idx].addr & mask);
+            let bar_base = u64::from(self.bar_region_info[bar_idx].addr & mask);
 
             if bar_base == base {
                 return Some(bar_idx);
@@ -239,40 +291,71 @@ impl VfioPcieConfiguration {
         &mut self,
         reg_idx: usize,
         data: &[u8],
-    ) -> Option<BarReprogrammingParams> {
+    ) -> Option<crate::pci::BarReprogrammingParams> {
+        use crate::pci::BarReprogrammingParams;
+        
         if data.len() != 4 || !(BAR0_REG..BAR0_REG + NUM_BAR_REGS).contains(&reg_idx) {
             return None;
         }
 
         let bar_idx = reg_idx - BAR0_REG;
-        if !self.bars[bar_idx].used {
+        let info = self.bar_region_info[bar_idx];
+        if !info.used {
             return None;
         }
 
-        let value = LittleEndian::read_u32(data);
+        let value = u32::from_le_bytes(data.try_into().ok()?);
         if value == 0xffff_ffff {
             return None;
         }
 
-        let reg_mask = if self.writable_bits[reg_idx] == 0 {
-            BAR_MEM_ADDR_MASK
-        } else {
-            self.writable_bits[reg_idx]
+        let reg_mask = {
+            let writable_mask = self.writable_bits.get(reg_idx).copied().unwrap_or(0);
+            if writable_mask == 0 {
+                BAR_MEM_ADDR_MASK
+            } else {
+                writable_mask
+            }
         };
-        let old_base = u64::from(self.bars[bar_idx].addr & reg_mask);
-        let new_base = u64::from(value & reg_mask);
 
+        let old_base = u64::from(info.addr & reg_mask);
+        let new_base = u64::from(value & reg_mask);
         if old_base == new_base {
             return None;
         }
 
-        self.bars[bar_idx].addr = value;
-
+        let len = u64::from((!info.size_mask).wrapping_add(1));
         Some(BarReprogrammingParams {
             old_base,
             new_base,
-            // Placeholder for MVP framework; callers should initialize size masks.
-            len: u64::from((!self.bars[bar_idx].size_mask).wrapping_add(1)),
+            len,
         })
     }
+
+    pub(crate) fn vfio_region_index_from_base(&self, base: u64) -> Option<u32> {
+        let mut bar_idx = 0usize;
+        while bar_idx < NUM_BAR_REGS {
+            let info = self.bar_region_info[bar_idx];
+            if !info.used {
+                bar_idx += 1;
+                continue;
+            }
+
+            let reg_idx = BAR0_REG + bar_idx;
+            let mask = self.writable_bits
+                .get(reg_idx)
+                .copied()
+                .map(|m| if m == 0 { BAR_MEM_ADDR_MASK } else { m })
+                .unwrap_or(BAR_MEM_ADDR_MASK);
+
+            if u64::from(info.addr & mask) == base {
+                return Some(VFIO_PCI_BAR0_REGION_INDEX + bar_idx as u32);
+            }
+
+            bar_idx += 1;
+        }
+
+        None
+    }
+
 }

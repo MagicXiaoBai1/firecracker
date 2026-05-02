@@ -1,23 +1,27 @@
 
 use std::fmt;
-use super::configuration::VfioPcieConfiguration;
+use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU32, AtomicUsize, Ordering};
+use std::sync::{Arc, Barrier, Mutex};
+
+use log::{error, info, warn};
+use thiserror::Error;
+
+use super::configuration::{VfioBarRegionInfo, VfioPcieConfiguration};
+use super::mmio_mgr::VfioMmioEngine;
+use crate::pci::msix::{MsixCap, MsixConfig, MsixConfigState};
+use crate::pci::{BarReprogrammingParams, DeviceRelocationError, PciDevice};
+use crate::vstate::interrupts::{InterruptError, MsixVectorGroup};
+use crate::vstate::vm::VmCommon;
+use pci::{
+    PciBdf, PciCapabilityId, PciClassCode, PciMassStorageSubclass, PciNetworkControllerSubclass,
+    PciSubclass,
+};
 use vfio_bindings::bindings::vfio::*;
 use vfio_ioctls::{
     VfioContainer, VfioDevice, VfioIrq, VfioRegionInfoCap, VfioRegionSparseMmapArea,
 };
 use vmm_sys_util::eventfd::EventFd;
-use std::sync::{Arc, Barrier, Mutex};
-use log::{error, info, warn};
-use thiserror::Error;
-use crate::vstate::interrupts::{InterruptError, MsixVectorGroup};
-use crate::pci::msix::{MsixCap, MsixConfig, MsixConfigState};
-use crate::vstate::vm::VmCommon;
-use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU32, AtomicUsize, Ordering};
-use crate::pci::{BarReprogrammingParams, DeviceRelocationError, PciDevice};
-use pci::{
-    PciBdf, PciCapabilityId, PciClassCode, PciMassStorageSubclass, PciNetworkControllerSubclass,
-    PciSubclass,
-};
+use super::msix::VfioInterruptEngine;
 
 #[derive(Debug, Error)]
 pub enum VfioError {
@@ -99,6 +103,45 @@ pub(crate) trait Vfio: Send + Sync {
         unimplemented!()
     }
 }
+
+pub(crate) trait VfioBarOps {
+    fn move_bar(
+        &mut self,
+        bar_idx: usize,
+        old_base: u64,
+        new_base: u64,
+        len: u64,
+    ) -> Result<(), Box<dyn std::error::Error>>;
+
+    fn allocate_bars(
+        &mut self,
+        vm: VmCommon,
+        bar_region_info: &[VfioBarRegionInfo; 6],
+    ) -> Result<(), Box<dyn std::error::Error>>;
+
+    fn read_bar(&self, base: u64, offset: u64, data: &mut [u8]);
+
+    fn write_bar(&self, base: u64, offset: u64, data: &[u8]) -> Option<Arc<Barrier>>;
+}
+
+pub(crate) trait VfioMsixOps {
+    fn read_table(&self, offset: u64, data: &mut [u8]);
+
+    fn write_table(&mut self, offset: u64, data: &[u8]);
+
+    fn set_msg_ctl(&mut self, reg: u16);
+
+    fn read_pba(&self, offset: u64, data: &mut [u8]);
+
+    fn write_pba(&mut self, _offset: u64, _data: &[u8]);
+
+    fn set_pba_bit(&mut self, vector: u16, reset: bool);
+
+    fn get_pba_bit(&self, vector: u16) -> u8;
+
+    fn inject_msix_and_clear_pba(&mut self, vector: usize);
+}
+
 pub(crate) struct VfioDeviceWrapper {
     device: Arc<VfioDevice>,
 }
@@ -141,19 +184,15 @@ impl Vfio for VfioDeviceWrapper {
     }
 }
 
-#[derive(Debug)]
-pub struct VfioInterruptMsix {
-    msix_config: Arc<Mutex<MsixConfig>>,
-    vectors: Arc<MsixVectorGroup>,
-}
 
 const PCI_ROM_EXP_BAR_INDEX: usize = 12;
 // PCI config register size (4 bytes).
 const PCI_CONFIG_REGISTER_SIZE: usize = 4;
 pub(crate) struct VfioCommon {
     pub(crate) configuration: VfioPcieConfiguration,
-    // Reserved for BAR-backed MSI-X emulation path.
-    virtio_interrupt: Option<Arc<VfioInterruptMsix>>,
+    bar_region_info: [VfioBarRegionInfo; 6],
+    mmio_mgr: VfioMmioEngine,
+    virtio_interrupt_mgr: VfioInterruptEngine,
     pub(crate) vfio_wrapper: Arc<dyn Vfio>,
     // TODO pub(crate) patches: HashMap<usize, ConfigPatch>,
 
@@ -163,7 +202,7 @@ impl fmt::Debug for VfioCommon {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("VfioCommon")
             .field("configuration", &self.configuration)
-            .field("virtio_interrupt", &self.virtio_interrupt)
+            .field("virtio_interrupt_mgr", &self.virtio_interrupt_mgr)
             .finish()
     }
 }
@@ -176,25 +215,19 @@ impl VfioCommon {
         msix_vectors: MsixVectorGroup
     ) -> Self{
         // Keep a VFIO-local config cache for BAR/MSI-X control paths.
-        let configuration = VfioPcieConfiguration::new();
+        let mut configuration = VfioPcieConfiguration::new(vfio_wrapper.clone());
+        let bar_region_info = configuration.compute_bar_region_info(vfio_wrapper.as_ref());
+        let mut mmio_mgr = configuration.create_vfio_mmio_engine();
+        mmio_mgr.sync_passthrough_status(&bar_region_info);
 
-        let msix_vectors = Arc::new(msix_vectors);
-        let msix_config = Arc::new(Mutex::new(MsixConfig::new(
-            msix_vectors.clone(),
-            id,
-        )));
-
-        let virtio_interrupt: Option<Arc<VfioInterruptMsix>> = Option::Some(Arc::new(
-            VfioInterruptMsix{
-                msix_config: msix_config, 
-                vectors: msix_vectors
-            }
-        ));
+        let virtio_interrupt_mgr = configuration.create_vfio_interrupt_engine(id, msix_vectors);
 
         // TODO FIRST 新建VfioInterruptMsix，研究vfio_wrapper传递
         Self{
             configuration,
-            virtio_interrupt,
+            bar_region_info,
+            mmio_mgr,
+            virtio_interrupt_mgr,
             vfio_wrapper
         }
     }
@@ -210,12 +243,19 @@ impl VfioCommon {
         // 2. 判断是否在使能misx or msi
         // 3. 读写vfio fd(vfio_wrapper)
         // 4. 根据MSE bit的值处理 bar reprogram（好像什么都不用做）因为bar reprogram（移动bar空间的HPA）不会发生
-        if VfioPcieConfiguration::is_access_bar_register(reg_idx, offset, data)
+        let is_bar_write = VfioPcieConfiguration::is_access_bar_register(reg_idx, offset, data);
+        if is_bar_write
             || self
                 .configuration
                 .is_access_msix_capabilities(reg_idx, offset, data, self.vfio_wrapper.as_ref())
         {
+            if is_bar_write {
+                let _ = self.configuration.detect_bar_reprogramming(reg_idx, data);
+            }
+
             self.configuration.write_config_register(reg_idx, offset, data);
+            self.bar_region_info = self.configuration.bar_region_info();
+            self.mmio_mgr.sync_passthrough_status(&self.bar_region_info);
             return None;
         }
 
@@ -250,37 +290,32 @@ impl VfioCommon {
     }
 
     pub fn read_bar(&mut self, base: u64, offset: u64, data: &mut [u8]) {
-        // 1. 判断是否在读msix table
-        // 1. 是：读vmm内存中的msix table -> 调用 virtio_interrupt
+        // 1. 判断是否在读msix table 和 PBA
+        // 1. 是：读vmm内存中的msix table -> 调用 virtio_interrupt_mgr
         // 2. 否：读vfio fd(vfio_wrapper)
-        if self.virtio_interrupt.is_some() {
-            if let Some((table_offset, _table_size, pba_offset, pba_size)) =
-                self.configuration.msix_layout_for_bar(self.vfio_wrapper.as_ref(), base)
-            {
-                let access_msix_vector = self
-                    .configuration
-                    .is_access_msix_vector_register(self.vfio_wrapper.as_ref(), base, offset);
+        if let Some((table_offset, _table_size, pba_offset, pba_size)) =
+            self.configuration.msix_layout_for_bar(self.vfio_wrapper.as_ref(), base)
+        {
+            let access_msix_vector = self
+                .configuration
+                .is_access_msix_vector_register(self.vfio_wrapper.as_ref(), base, offset);
 
-                if access_msix_vector {
-                    if let Some(irq) = &self.virtio_interrupt {
-                        let msix = irq.msix_config.lock().expect("Poisoned lock");
-                        if let Some(msix_offset) = offset.checked_sub(table_offset) {
-                            msix.read_table(msix_offset, data);
-                            return;
-                        }
+            if access_msix_vector {
+                if let Some(msix_offset) = offset.checked_sub(table_offset) {
+                    self.virtio_interrupt_mgr.read_table(msix_offset, data);
+                    return;
+                }
 
-                        if let Some(pba_offset) = offset.checked_sub(pba_offset) {
-                            if pba_offset < pba_size {
-                                msix.read_pba(pba_offset, data);
-                                return;
-                            }
-                        }
+                if let Some(pba_offset) = offset.checked_sub(pba_offset) {
+                    if pba_offset < pba_size {
+                        self.virtio_interrupt_mgr.read_pba(pba_offset, data);
+                        return;
                     }
                 }
             }
         }
 
-        if let Some(region_index) = self.vfio_region_index_from_base(base) {
+        if let Some(region_index) = self.configuration.vfio_region_index_from_base(base) {
             self.vfio_wrapper.region_read(region_index, offset, data);
         } else {
             warn!("Failed to resolve VFIO BAR region for base={:#x}; defaulting to BAR0", base);
@@ -290,37 +325,32 @@ impl VfioCommon {
     }
 
     pub fn write_bar(&mut self, base: u64, offset: u64, data: &[u8]) -> Option<Arc<Barrier>> {
-        // 1. 判断是否在写msix table
-        // 1. 是：写vmm内存中的msix table -> 调用 virtio_interrupt
+        // 1. 判断是否在写msix table 和 PBA
+        // 1. 是：写vmm内存中的msix table -> 调用 virtio_interrupt_mgr
         // 2. 否：写vfio fd(vfio_wrapper)
-        if self.virtio_interrupt.is_some() {
-            if let Some((table_offset, _table_size, pba_offset, pba_size)) =
-                self.configuration.msix_layout_for_bar(self.vfio_wrapper.as_ref(), base)
-            {
-                let access_msix_vector = self
-                    .configuration
-                    .is_access_msix_vector_register(self.vfio_wrapper.as_ref(), base, offset);
+        if let Some((table_offset, _table_size, pba_offset, pba_size)) =
+            self.configuration.msix_layout_for_bar(self.vfio_wrapper.as_ref(), base)
+        {
+            let access_msix_vector = self
+                .configuration
+                .is_access_msix_vector_register(self.vfio_wrapper.as_ref(), base, offset);
 
-                if access_msix_vector {
-                    if let Some(irq) = &self.virtio_interrupt {
-                        let mut msix = irq.msix_config.lock().expect("Poisoned lock");
-                        if let Some(msix_offset) = offset.checked_sub(table_offset) {
-                            msix.write_table(msix_offset, data);
-                            return None;
-                        }
+            if access_msix_vector {
+                if let Some(msix_offset) = offset.checked_sub(table_offset) {
+                    self.virtio_interrupt_mgr.write_table(msix_offset, data);
+                    return None;
+                }
 
-                        if let Some(pba_offset) = offset.checked_sub(pba_offset) {
-                            if pba_offset < pba_size {
-                                msix.write_pba(pba_offset, data);
-                                return None;
-                            }
-                        }
+                if let Some(pba_offset) = offset.checked_sub(pba_offset) {
+                    if pba_offset < pba_size {
+                        self.virtio_interrupt_mgr.write_pba(pba_offset, data);
+                        return None;
                     }
                 }
             }
         }
 
-        if let Some(region_index) = self.vfio_region_index_from_base(base) {
+        if let Some(region_index) = self.configuration.vfio_region_index_from_base(base) {
             self.vfio_wrapper.region_write(region_index, offset, data);
         } else {
             warn!("Failed to resolve VFIO BAR region for base={:#x}; defaulting to BAR0", base);
@@ -352,11 +382,6 @@ impl VfioCommon {
     ) {
         // 将设备可直通的bar空间的mmap的HPA 配置给guest的GPA map HPA
         info!("set_vfio_bar_in_kvm is not implemented yet");
-    }
-
-    fn vfio_region_index_from_base(&self, base: u64) -> Option<u32> {
-        self.configuration.find_bar_by_base(base).map(|idx| idx as u32)
-            .map(|bar_idx| VFIO_PCI_BAR0_REGION_INDEX + bar_idx)
     }
 
 }
