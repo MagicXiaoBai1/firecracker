@@ -85,7 +85,13 @@ impl VfioPciDevice {
     ) -> Self {
         let vfio_device = Arc::new(vfio_device);
         let vfio_wrapper = VfioDeviceWrapper::new(Arc::clone(&vfio_device));
-        let common = VfioCommon::new(pci_device_bdf.into(), &PciVfioSubclass::VfioSubclass,  Arc::new(vfio_wrapper) as Arc<dyn Vfio>, msix_vectors);
+        let common = VfioCommon::new(
+            pci_device_bdf.into(),
+         &PciVfioSubclass::VfioSubclass,
+           Arc::new(vfio_wrapper) as Arc<dyn Vfio>, 
+           msix_vectors,
+           vm.clone(),
+        );
 
         Self {
             id: format!("vfio-pci-{}", pci_device_bdf),
@@ -142,7 +148,8 @@ impl PciDevice for VfioPciDevice {
             old_base,
             new_base
         );
-        Err(DeviceRelocationError::NotSupported)
+        self.common.move_bar(old_base, new_base)
+
     }
 
     fn read_bar(&mut self, base: u64, offset: u64, data: &mut [u8]) {

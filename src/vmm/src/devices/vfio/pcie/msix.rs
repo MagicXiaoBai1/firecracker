@@ -8,6 +8,7 @@ use thiserror::Error;
 
 use super::configuration::{VfioBarRegionInfo, VfioPcieConfiguration};
 use super::mmio_mgr::VfioMmioEngine;
+use crate::Vm;
 use crate::pci::msix::{MsixCap, MsixConfig, MsixConfigState};
 use crate::pci::{BarReprogrammingParams, DeviceRelocationError, PciDevice};
 use crate::vstate::interrupts::{InterruptError, MsixVectorGroup};
@@ -27,6 +28,7 @@ pub struct VfioInterruptEngine {
     pub(crate) vfio_wrapper: Arc<dyn Vfio>,
     msix_config: Arc<Mutex<MsixConfig>>,
     vectors: Arc<MsixVectorGroup>,
+    vm: Arc<Vm>
 }
 
 impl fmt::Debug for VfioInterruptEngine {
@@ -40,6 +42,7 @@ impl VfioInterruptEngine {
         vfio_wrapper: Arc<dyn Vfio>,
         id: u32,
         msix_vectors: MsixVectorGroup,
+        vm: Arc<Vm>
     ) -> Self {
         let msix_vectors = Arc::new(msix_vectors);
         let msix_config = Arc::new(Mutex::new(MsixConfig::new(msix_vectors.clone(), id)));
@@ -48,29 +51,30 @@ impl VfioInterruptEngine {
             vfio_wrapper,
             msix_config,
             vectors: msix_vectors,
+            vm
         }
     }
 }
 
 impl VfioMsixOps for VfioInterruptEngine {
     fn read_table(&self, _offset: u64, _data: &mut [u8]) {
-        unimplemented!()
+        // unimplemented!()
     }
 
     fn write_table(&mut self, _offset: u64, _data: &[u8]) {
-        unimplemented!()
+        // unimplemented!()
     }
 
     fn set_msg_ctl(&mut self, _reg: u16) {
-        unimplemented!()
+        // unimplemented!()
     }
 
     fn read_pba(&self, _offset: u64, _data: &mut [u8]) {
-        unimplemented!()
+        // unimplemented!()
     }
 
     fn write_pba(&mut self, _offset: u64, _data: &[u8]) {
-        unimplemented!()
+        // unimplemented!()
     }
 
     fn set_pba_bit(&mut self, _vector: u16, _reset: bool) {
