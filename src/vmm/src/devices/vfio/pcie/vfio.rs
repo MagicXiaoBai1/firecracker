@@ -240,37 +240,21 @@ impl VfioCommon {
         offset: u64,
         data: &[u8],
     ) -> Option<Arc<Barrier>> {
-        // 1. 判断是否在写bar寄存器：如果是就写PciConfiguration对象，然后返回
-        // 2. 判断是否在使能misx or msi：如果是就写PciConfiguration对象，然后返回
-        // 3. 读写vfio fd(vfio_wrapper)
-        // PS这里不用处理 bar move
-        let is_bar_write = VfioPcieConfiguration::is_access_bar_register(reg_idx, offset, data);
-        if is_bar_write
-            || self
-                .configuration
-                .is_access_msix_capabilities(reg_idx, offset, data, self.vfio_wrapper.as_ref())
-        {
-
+        // Check if the access should be handled locally in configuration cache
+        if self.configuration.should_handle_config_write_locally(reg_idx, offset, data) {
             self.configuration.write_config_register(reg_idx, offset, data);
             return None;
         }
 
+        // Otherwise, write directly to VFIO device
         let cfg_offset = ((reg_idx * PCI_CONFIG_REGISTER_SIZE) as u64 + offset) as u32;
         self.vfio_wrapper.write_config(cfg_offset, data);
         None
     }
 
     pub fn read_config_register(&mut self, reg_idx: usize) -> u32 {
-        // 1. 判断是否在读bar寄存器：如果是就读PciConfiguration对象，然后返回
-        // 2. 判断是否在读misx or msi能力
-        // 3. mask multi-function bit
-        // 4. 读vfio fd(vfio_wrapper)
-        // 5. 处理mask和patch
-        let mut value = if VfioPcieConfiguration::is_access_bar_register(reg_idx, 0, &[])
-            || self
-                .configuration
-                .is_access_msix_capabilities(reg_idx, 0, &[], self.vfio_wrapper.as_ref())
-        {
+        // Check if the access should be handled locally in configuration cache
+        let mut value = if self.configuration.should_handle_config_read_locally(reg_idx) {
             self.configuration.read_reg(reg_idx)
         } else {
             self.vfio_wrapper.read_config_dword((reg_idx * PCI_CONFIG_REGISTER_SIZE) as u32)

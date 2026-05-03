@@ -105,23 +105,70 @@ impl VfioPcieConfiguration {
     }
 
     pub(crate) fn read_reg(&self, reg_idx: usize) -> u32 {
-        let Some(&value) = self.registers.get(reg_idx) else {
-            return 0xffff_ffff;
-        };
+        *self.registers.get(reg_idx).unwrap_or(&0xffff_ffff)
+    }
 
-        if (BAR0_REG..BAR0_REG + NUM_BAR_REGS).contains(&reg_idx)
-            && value == 0xffff_ffff
-            && self.bar_region_info[reg_idx - BAR0_REG].used
-        {
-            return self.bar_region_info[reg_idx - BAR0_REG].size_mask;
+    pub(crate) fn write_reg(&mut self, reg_idx: usize, value: u32) {
+        let mut mask = self.writable_bits[reg_idx];
+
+        if (BAR0_REG..BAR0_REG + NUM_BAR_REGS).contains(&reg_idx) {
+            let bar_idx = reg_idx - BAR0_REG;
+            // When guest writes all 1's to probe BAR size, return the size mask on next read.
+            if value == 0xffff_ffff && self.bar_region_info[bar_idx].used {
+                mask = self.bar_region_info[bar_idx].size_mask;
+            }
+            // Track BAR address updates (non-probe writes).
+            if value != 0xffff_ffff {
+                self.bar_region_info[bar_idx].addr = value;
+            }
         }
 
-        value
+        if let Some(r) = self.registers.get_mut(reg_idx) {
+            *r = (*r & !self.writable_bits[reg_idx]) | (value & mask);
+        }
     }
 
     pub(crate) fn write_config_register(&mut self, reg_idx: usize, offset: u64, data: &[u8]) {
+        // 1. 判断是否在写bar寄存器：如果是就写PciConfiguration对象，然后返回
+        // 2. 判断是否在使能misx or msi：如果是就写PciConfiguration对象，然后返回
+        // 3. 读写vfio fd(vfio_wrapper)
+        // PS这里不用处理 bar move
         if reg_idx >= NUM_CONFIGURATION_REGISTERS || u64_to_usize(offset) + data.len() > 4 {
             return;
+        }
+
+        // Check if accessing msg_ctl (MSIX capability offset + 2, word length)
+        if let Some(msix_cap_offset) = self.find_msix_cap_offset(self.vfio_wrapper.clone().as_ref()) {
+            let access_start = reg_idx * 4 + u64_to_usize(offset);
+            let access_end = access_start + data.len();
+            let msg_ctl_start = msix_cap_offset + 2;
+            let msg_ctl_end = msg_ctl_start + 2;
+
+            // If access overlaps with msg_ctl
+            if access_start < msg_ctl_end && msg_ctl_start < access_end {
+                // Extract msg_ctl value from data
+                let msg_ctl_offset_in_data = msg_ctl_start.saturating_sub(access_start);
+                let msg_ctl_remaining = msg_ctl_end - msg_ctl_start;
+                
+                if msg_ctl_offset_in_data < data.len() && msg_ctl_remaining > 0 {
+                    // Read msg_ctl from the current register value first
+                    let mut msg_ctl_bytes = [0u8; 2];
+                    let shift = ((msg_ctl_start % 4) * 8) as u32;
+                    let msg_ctl_from_reg = ((self.registers[msix_cap_offset / 4] >> shift) & 0xffff) as u16;
+                    msg_ctl_bytes.copy_from_slice(&msg_ctl_from_reg.to_le_bytes());
+
+                    // Overlay the written bytes
+                    let bytes_to_copy = std::cmp::min(
+                        data.len() - msg_ctl_offset_in_data,
+                        msg_ctl_remaining
+                    );
+                    msg_ctl_bytes[0..bytes_to_copy]
+                        .copy_from_slice(&data[msg_ctl_offset_in_data..msg_ctl_offset_in_data + bytes_to_copy]);
+                    
+                    let msg_ctl_value = u16::from_le_bytes(msg_ctl_bytes);
+                    self.msix_mgr.write().unwrap().set_msg_ctl(msg_ctl_value);
+                }
+            }
         }
 
         let mut reg = self.registers[reg_idx];
@@ -141,17 +188,13 @@ impl VfioPcieConfiguration {
             }
             4 => {
                 reg = LittleEndian::read_u32(data);
+                self.write_reg(reg_idx, reg);
+                return;
             }
             _ => return,
         }
 
         self.registers[reg_idx] = reg;
-
-        if (BAR0_REG..BAR0_REG + NUM_BAR_REGS).contains(&reg_idx) && reg != 0xffff_ffff {
-            let bar_idx = reg_idx - BAR0_REG;
-            self.bar_region_info[bar_idx].addr = reg;
-            self.bar_region_info[bar_idx].used = true;
-        }
     }
 
     // BAR Region 空间 ======================================================================================
@@ -233,7 +276,8 @@ impl VfioPcieConfiguration {
     }
 
 
-    // Msix ======================================================================================
+    // BAR Region 空间 ======================================================================================
+
 
     pub(crate) fn is_access_msix_capabilities(
         &mut self,
@@ -331,6 +375,49 @@ impl VfioPcieConfiguration {
         }
 
         None
+    }
+
+    /// Check if accessing msg_ctl field in MSIX capability
+    /// msg_ctl is located at capability_offset + 2 (word, 2 bytes)
+    pub(crate) fn is_access_msg_ctl(&mut self, reg_idx: usize, offset: u64, data: &[u8]) -> bool {
+        let Some(msix_cap_offset) = self.find_msix_cap_offset(self.vfio_wrapper.clone().as_ref()) else {
+            return false;
+        };
+
+        let access_start = reg_idx * 4 + u64_to_usize(offset);
+        let access_end = access_start + data.len();
+
+        let msg_ctl_start = msix_cap_offset + 2;
+        let msg_ctl_end = msg_ctl_start + 2;
+
+        access_start < msg_ctl_end && msg_ctl_start < access_end
+    }
+
+    /// Check if the configuration register access should be handled locally
+    /// Returns true if accessing BAR registers or MSIX capabilities (including msg_ctl)
+    pub(crate) fn should_handle_config_write_locally(
+        &mut self,
+        reg_idx: usize,
+        offset: u64,
+        data: &[u8],
+    ) -> bool {
+        // Check if accessing BAR register
+        if Self::is_access_bar_register(reg_idx, offset, data) {
+            return true;
+        }
+        // Check if accessing MSIX capabilities
+        self.is_access_msix_capabilities(reg_idx, offset, data, self.vfio_wrapper.clone().as_ref())
+    }
+
+    /// Check if the configuration register read should be handled locally
+    /// Returns true if accessing BAR registers or MSIX capabilities (including msg_ctl)
+    pub(crate) fn should_handle_config_read_locally(&mut self, reg_idx: usize) -> bool {
+        // Check if accessing BAR register
+        if Self::is_access_bar_register(reg_idx, 0, &[]) {
+            return true;
+        }
+        // Check if accessing MSIX capabilities
+        self.is_access_msix_capabilities(reg_idx, 0, &[], self.vfio_wrapper.clone().as_ref())
     }
 
     
