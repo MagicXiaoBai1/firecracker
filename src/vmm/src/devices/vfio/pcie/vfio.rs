@@ -9,7 +9,7 @@ use log::{debug, error, info, warn};
 use thiserror::Error;
 
 use super::configuration::{VfioBarRegionInfo, VfioPcieConfiguration};
-use super::mmio_mgr::VfioMmioEngine;
+use super::mmio_mgr::{BarRegionAccessRequest, BlackStatus, VfioMmioEngine};
 use crate::pci::msix::{MsixCap, MsixConfig, MsixConfigState};
 use crate::pci::{BarReprogrammingParams, DeviceRelocationError, PciDevice};
 use crate::vstate::interrupts::{InterruptError, MsixVectorGroup};
@@ -126,6 +126,13 @@ pub(crate) trait VfioBarOps {
     fn free_bars(&mut self, _guest_base: u64, _len: u64) -> Result<(), Box<dyn std::error::Error>>;
 
     fn read_bar(&self, base: u64, offset: u64, data: &mut [u8]);
+
+    fn blacklist_filter(
+        &self,
+        bar_region_id: usize,
+        len: u64,
+        offset: u64,
+    ) -> Vec<BarRegionAccessRequest>;
 
     fn write_bar(&self, base: u64, offset: u64, data: &[u8]) -> Option<Arc<Barrier>>;
 }
@@ -317,7 +324,9 @@ impl VfioCommon {
     pub fn write_bar(&mut self, base: u64, offset: u64, data: &[u8]) -> Option<Arc<Barrier>> {
         // 1. 判断是否在写msix table 和 PBA
         // 1. 是：写vmm内存中的msix table -> 调用 virtio_interrupt_mgr
-        // 2. 否：写vfio fd(vfio_wrapper)
+        // 2. 否：继续
+        // 3. 调用VfioBarOps的blacklist_filter
+        // 4. 仅对BlackStatus::None的访问，写vfio fd(vfio_wrapper)
         if let Some((table_offset, _table_size, pba_offset, pba_size)) =
             self.configuration.msix_layout_for_bar(self.vfio_wrapper.as_ref(), base)
         {
@@ -340,12 +349,38 @@ impl VfioCommon {
             }
         }
 
-        if let Some(region_index) = self
-            .configuration
-            .bar_index_by_base(base)
-            .map(|bar_idx| VFIO_PCI_BAR0_REGION_INDEX + bar_idx as u32)
-        {
-            self.vfio_wrapper.region_write(region_index, offset, data);
+        if let Some(bar_idx) = self.configuration.bar_index_by_base(base) {
+            let region_index = VFIO_PCI_BAR0_REGION_INDEX + bar_idx as u32;
+            let access_reqs = self
+                .mmio_mgr
+                .read()
+                .unwrap()
+                .blacklist_filter(bar_idx, data.len() as u64, offset);
+
+            for req in access_reqs {
+                if req.block_policy != BlackStatus::None {
+                    continue;
+                }
+
+                let Some(rel_start) = req.bar_offset.checked_sub(offset) else {
+                    continue;
+                };
+                let Ok(start) = usize::try_from(rel_start) else {
+                    continue;
+                };
+                let Ok(seg_len) = usize::try_from(req.len) else {
+                    continue;
+                };
+                if start >= data.len() {
+                    continue;
+                }
+
+                let end = start.saturating_add(seg_len).min(data.len());
+                if start < end {
+                    self.vfio_wrapper
+                        .region_write(region_index, req.bar_offset, &data[start..end]);
+                }
+            }
         } else {
             warn!("Failed to resolve VFIO BAR region for base={:#x}; defaulting to BAR0", base);
             self.vfio_wrapper
