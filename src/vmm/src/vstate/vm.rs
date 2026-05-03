@@ -544,6 +544,7 @@ impl DeviceRelocation for Vm {
         _len: u64,
         _pci_dev: &mut dyn PciDevice,
     ) -> Result<(), DeviceRelocationError> {
+        // TODO ,判断设备是否支持，如果支持就修改设备在pci bus中的注册情况
         Err(DeviceRelocationError::NotSupported)
     }
 }
