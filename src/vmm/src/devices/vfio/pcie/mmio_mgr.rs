@@ -33,9 +33,9 @@ pub(crate) struct VfioMmioBlacklistEntry {
 #[derive(Debug, Default, Clone, Copy)]
 pub(crate) struct VfioMmioPassthroughState {
     pub gpa: u64,
-    pub len: u64,
     pub bar_region_id: usize,
     pub bar_offset: u64,
+    pub len: u64,
 }
 
 
@@ -69,14 +69,14 @@ impl VfioMmioEngine {
         offset: u64,
         len: u64,
     ) {
-            self.blacklist.push(VfioMmioBlacklistEntry {
-                bar_region_id, 
-                offset,
-                len,
-                block_policy: BlackStatus::Discard
-            });
+        self.blacklist.push(VfioMmioBlacklistEntry {
+            bar_region_id, 
+            offset,
+            len,
+            block_policy: BlackStatus::Discard
+        });
 
-            self.blacklist.sort_by_key(|entry| (entry.bar_region_id, entry.offset));
+        self.blacklist.sort_by_key(|entry| (entry.bar_region_id, entry.offset));
     }
 
     pub(crate) fn blacklist_filter(
@@ -175,7 +175,6 @@ impl VfioBarOps for VfioMmioEngine {
         old_base: u64,
         new_base: u64,
         len: u64,
-        host_device_offset: u64,
     ) -> Result<(), DeviceRelocationError>{
         Ok(())
     }

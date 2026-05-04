@@ -112,7 +112,6 @@ pub(crate) trait VfioBarOps {
         old_base: u64,
         new_base: u64,
         len: u64,
-        host_device_offset: u64,
     ) -> Result<(), DeviceRelocationError>;
 
     fn allocate_bars(
