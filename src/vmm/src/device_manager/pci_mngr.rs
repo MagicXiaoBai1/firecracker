@@ -56,6 +56,13 @@ pub struct PciDevices {
     pub virtio_devices: HashMap<(VirtioDeviceType, String), Arc<Mutex<VirtioPciDevice>>>,
     /// All VFIO PCIe devices, keys PciBdf
     pub vfio_devices: HashMap<u32, Arc<Mutex<VfioPciDevice>>>
+    
+    // TODO vfio_dma_engine 持有一个或多个VFIO container 负责DMA
+    // 这个对象有啥用:
+    // vfio_devices中的设备在修改bar空间是要调用vfio_dma_engine的方法
+    // DRAM动态删减时也要调用vfio_dma_engine的方法（这块先不做）
+    // 对象的创建时机:attach_pci_vfio_device时检查这个对象
+    // pub vfio_dma_engine Option<VfioDmaEngine>
 }
 
 #[derive(Debug, thiserror::Error, displaydoc::Display)]

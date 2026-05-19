@@ -1,6 +1,12 @@
 use std::ops::DerefMut;
 use std::sync::Arc;
+use core::ffi::c_int;
+use core::ptr::null_mut;
+use std::io::{Error, ErrorKind};
+use std::os::fd::{AsRawFd as _, BorrowedFd};
+use vfio_bindings::bindings::vfio::*;
 
+use libc::size_t;
 use crate::devices::vfio::pcie::vfio::{Vfio, VfioError};
 use crate::pci::{BarReprogrammingParams, DeviceRelocationError};
 use crate::vstate::bus::BusDeviceSync;
@@ -155,15 +161,43 @@ impl VfioMmioEngine {
 
     }
 
+
     /// Map MMIO regions into the guest, and avoid VM exits when the guest tries
     /// to reach those regions.
     ///
     /// # Arguments
     ///
-    /// * `vm` - The VM object. It is used to set the VFIO MMIO regions
-    ///   as user memory regions.
-    /// * `mem_slot` - The closure to return a memory slot.
-    pub fn map_mmio_region(&mut self, bar_region_info: &[VfioBarRegionInfo; NUM_BAR_REGS]) -> Result<(), VfioError> {
+    fn map_mmio_regions(
+        &mut self,
+        guest_base: u64,
+        bar_region_id: usize,
+        offset: u64,
+        len: u64,
+    ) -> Result<(), Box<dyn std::error::Error>>{
+        let fd = self.vfio_wrapper.as_raw_fd().ok_or_else(|| Error::new(ErrorKind::Other, "vfio wrapper does not support as_raw_fd"))?;
+        // SAFETY: fd is guaranteed valid
+        let fd = unsafe { BorrowedFd::borrow_raw(fd) };
+
+        let Ok(len) = libc::size_t::try_from(len) else {
+            return Err(Box::new(Error::new(ErrorKind::InvalidInput, "length too large")));
+        };
+        let Ok(offset) = libc::off_t::try_from(offset) else {
+            return Err(Box::new(Error::new(ErrorKind::InvalidInput, "offset too large")));
+        };
+
+        let region_flags = self.vfio_wrapper.get_vfio_device().get_region_flags(bar_region_id.try_into().unwrap());
+        if region_flags & VFIO_REGION_INFO_FLAG_MMAP == 0 {
+            return Err(Box::new(Error::new(ErrorKind::Other, "region does not support mmap")));
+        }
+        let mut prot = 0;
+        if region_flags & VFIO_REGION_INFO_FLAG_READ != 0 {
+            prot |= libc::PROT_READ;
+        }
+        if region_flags & VFIO_REGION_INFO_FLAG_WRITE != 0 {
+            prot |= libc::PROT_WRITE;
+        }
+        let addr = unsafe { libc::mmap(null_mut(), len, prot, libc::MAP_SHARED, fd.as_raw_fd(), offset) };
+
         Ok(())
     }
 
@@ -182,12 +216,31 @@ impl VfioBarOps for VfioMmioEngine {
     fn allocate_bars(
         &mut self,
         guest_base: u64,
+        bar_region_id: usize,
+        offset: u64,
         len: u64,
-        host_device_offset: u64,
-
     ) -> Result<(), Box<dyn std::error::Error>>{
-        let mut resource_allocator_lock = self.vm.resource_allocator();
-        let resource_allocator = resource_allocator_lock.deref_mut();
+        // let mut resource_allocator_lock = self.vm.resource_allocator();
+        // let resource_allocator = resource_allocator_lock.deref_mut();
+
+        let sub_regions = self.blacklist_filter(bar_region_id, len, offset);
+        for sub_region in sub_regions {
+            match sub_region.block_policy {
+                BlackStatus::Discard => {
+                    // 直接丢弃这个子区域，不映射到guest
+                    continue;
+                },
+                BlackStatus::KeepInMemory => {
+                    // 直接丢弃这个子区域，不映射到guest
+                    continue;
+                },
+                BlackStatus::None => {
+                    // 这个子区域没有特殊处理，直接映射到guest
+                    let guest_base = guest_base + (sub_region.bar_offset - offset);
+                    self.map_mmio_regions(guest_base, sub_region.bar_region_id, sub_region.bar_offset, sub_region.len)?;
+                },
+            }
+        }
 
         //
         //     let virtio_pci_bar_addr = mmio64_allocator

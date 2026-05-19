@@ -77,9 +77,9 @@ VFIO设备不一样，除了响应Guest对设备请求，还要监控Guest对设
 其中只有GPA读写VM Exit配置依赖上次对象如PciBus
 ### 需要模块or类（这块不太考虑GPA读写VM Exit配置）：
 - 对象内存识别模块
-  - 枚举体指明所有iova类型：一般ECAM、BAR 寄存器、Msix控制寄存器、丢弃、仅内存模拟读写、MsixVector、PBA
+  - 枚举体指明所有iova类型：一般 ECAM、BAR 寄存器、Msix控制寄存器、丢弃、仅内存模拟读写、MsixVector、PBA
   - 输入vfioDeviceFd输出所有iova段和段类型
-  - 输入GPA访问请求：输出这个GPA属于那个段，段内offest，拆开跨段的访问（或直接报错）
+  - 输入GPA访问请求（外部请求对ECAM是reg_idx: usize,offset: u64,data: &[u8]，对bar是base: u64, offset: u64, data: &mut [u8]）：输出这个GPA属于那个段，段的类型是啥，对BAR空间还要输出属于那个BAR Region，offest，拆开跨段的访问（或直接报错）
   - 钩子用于设备监控BAR空间变化
 - VfioCommon模块
   - 调用对象内存识别模块对不同的iova类型挂载不同的“处理函数”

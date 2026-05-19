@@ -5,6 +5,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the THIRD-PARTY file.
 
+use std::any::Any;
 use std::collections::HashMap;
 use std::fs::OpenOptions;
 use std::io::Write;
@@ -26,6 +27,7 @@ use vmm_sys_util::eventfd::EventFd;
 
 pub use crate::arch::{ArchVm as Vm, ArchVmError, VmState};
 use crate::arch::{GSI_MSI_END, host_page_size};
+use crate::devices::vfio::pcie::vfio_device::VfioPciDevice;
 use crate::logger::info;
 use crate::pci::{DeviceRelocation, DeviceRelocationError, PciDevice};
 use crate::persist::CreateSnapshotError;
@@ -544,7 +546,13 @@ impl DeviceRelocation for Vm {
         _len: u64,
         _pci_dev: &mut dyn PciDevice,
     ) -> Result<(), DeviceRelocationError> {
-        // TODO ,判断设备是否支持，如果支持就修改设备在pci bus中的注册情况
+        // TODO
+         if _pci_dev.need_bar_relocation_on_vm() {
+             // 目前仅vfio设备支持BAR重定位，且重定位后需要修改设备在pci bus中的注册情况
+             // 1. 从 self.common.resource_allocator.mmio64_memory 中释放旧的地址资源，并分配新的地址资源
+             // 2. 从 self.common.mmio_bus 中注销设备，再以新的地址注册设备
+             // 3. 调用设备的 move_bar 方法，完成设备内部的BAR重定位
+         }
         Err(DeviceRelocationError::NotSupported)
     }
 }

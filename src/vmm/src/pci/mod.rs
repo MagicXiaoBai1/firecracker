@@ -62,6 +62,12 @@ pub trait PciDevice: Send {
     fn move_bar(&mut self, _old_base: u64, _new_base: u64) -> Result<(), DeviceRelocationError> {
         Ok(())
     }
+
+    fn need_bar_relocation_on_vm(&self) -> bool {
+        // 默认不支持（所有未实现的设备直接返回false）
+        false
+    }
+
 }
 
 /// Errors for device manager.
