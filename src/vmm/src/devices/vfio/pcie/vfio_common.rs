@@ -10,7 +10,7 @@ use log::{debug, error, info, warn};
 use thiserror::Error;
 
 use super::configuration::{VfioBarRegionInfo, VfioPcieConfiguration};
-use super::mmio_mgr::{BarRegionAccessRequest, BlackStatus, VfioMmioEngine};
+use super::mmio_utils::{BarRegionAccessRequest, BlackStatus, VfioMmioEngine};
 use super::memory_recognizer::{MemoryRecognizer, VfioPcieMemoryRecognizer};
 use super::vfio::Vfio;
 use crate::pci::msix::{MsixCap, MsixConfig, MsixConfigState};
