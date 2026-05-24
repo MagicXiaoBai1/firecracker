@@ -68,6 +68,11 @@ pub trait PciDevice: Send {
         false
     }
 
+    fn get_bar_region_slot(&self, index: u64, offset: u64, len: u64) -> Option<u32> {
+        // TODO vfio设备在初始化时分配 slot
+        None
+    }
+
 }
 
 /// Errors for device manager.

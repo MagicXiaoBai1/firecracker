@@ -552,6 +552,7 @@ impl DeviceRelocation for Vm {
              // 1. 从 self.common.resource_allocator.mmio64_memory 中释放旧的地址资源，并分配新的地址资源
              // 2. 从 self.common.mmio_bus 中注销设备，再以新的地址注册设备
              // 3. 调用设备的 move_bar 方法，完成设备内部的BAR重定位
+             // 注意：有时 _len 为 0 此时就撤销那个bar空间的映射，让guest无法访问那个空间
          }
         Err(DeviceRelocationError::NotSupported)
     }

@@ -1,6 +1,7 @@
 use std::sync::Arc;
 use crate::vstate::memory::GuestMemoryMmap;
 use vfio_ioctls::VfioContainer;
+use vm_memory::GuestAddress;
 
 /// DmaEngine负责将guest memory挂载到vfio container
 ///
@@ -26,9 +27,12 @@ impl DmaEngine {
     }
 
     /// 对当前 guest memory 的所有 region 执行 vfio_dma_map
-    pub fn map_all_guest_memory(&mut self, _guest_mem: &GuestMemoryMmap) -> Result<(), ()> {
+    pub fn map_guest_memory(&mut self, gpa: GuestAddress, len: u64) -> Result<(), ()> {
         // TODO: 遍历 guest memory region，并对每一段调用 container.vfio_dma_map
         // 如果某段映射失败，应回滚之前的映射并返回错误。
+        Err(())
+    }
+    pub fn unmap_guest_memory(&mut self, gpa: GuestAddress, len: u64) -> Result<(), ()> {
         Err(())
     }
 
