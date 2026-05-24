@@ -9,7 +9,7 @@ use byteorder::{ByteOrder, LittleEndian};
 use crate::Vm;
 use crate::devices::vfio::pcie::vfio::{VfioBarOps, VfioMsixOps};
 use crate::utils::u64_to_usize;
-use super::mmio_mgr::VfioMmioEngine;
+use super::mmio_utils::VfioMmioEngine;
 use super::vfio::{Vfio};
 use super::msix::VfioInterruptEngine;
 use pci::PciCapabilityId;
@@ -314,7 +314,7 @@ impl VfioPcieConfiguration {
         let table_hit = table_offset
             .checked_add(table_size)
             .map(|end| (table_offset..end).contains(&offset))
-            .unwrap_or(false);
+            .unwrap_or(       false);
         let pba_hit = pba_offset
             .checked_add(pba_size)
             .map(|end| (pba_offset..end).contains(&offset))

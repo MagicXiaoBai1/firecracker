@@ -85,7 +85,7 @@ impl VfioPciDevice {
     ) -> Self {
         let vfio_device = Arc::new(vfio_device);
         let vfio_wrapper = VfioDeviceWrapper::new(Arc::clone(&vfio_device));
-        let common = VfioCommon::new(
+        let common: VfioCommon = VfioCommon::new(
             pci_device_bdf.into(),
          &PciVfioSubclass::VfioSubclass,
            Arc::new(vfio_wrapper) as Arc<dyn Vfio>, 
