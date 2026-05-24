@@ -1,12 +1,19 @@
 use std::sync::Arc;
+use log::info;
 use vfio_ioctls::{VfioDevice, VfioDeviceFd, VfioRegionInfoCap};
+use vm_allocator::AddressAllocator;
 use crate::devices::vfio::pcie::vfio::{Vfio, VfioDeviceWrapper};
+use crate::pci::BarReprogrammingParams;
 use crate::utils::u64_to_usize;
 use pci::PciCapabilityId;
 
 const PCI_CONFIG_BAR0_INDEX: usize = 4;
 const NUM_BAR_NUMS: usize = 6;
 const PCI_ROM_EXP_BAR_INDEX: usize = 12;
+
+const VFIO_REGION_INFO_FLAG_32BIT: u32 = 1 << 8;
+const VFIO_REGION_INFO_FLAG_64BIT: u32 = 1 << 9;
+
 // PCI config register size (4 bytes).
 const PCI_CONFIG_REGISTER_SIZE: usize = 4;
 
@@ -45,7 +52,7 @@ pub enum IovaAccessType {
     /// MSI-X vector table
     MsixTable { index: u16, offset: u64, data_len: u8},
     /// MSI-X Pending Bit Array (PBA)
-    Pba { offset: u16, data_len: u8 },
+    Pba { offset: u16, data_len: u8 },    // 目前用不上
     /// 除去上两块的其他BAR memory region (general MMIO)
     BarRegionCanForwardToVfio { index: u8, offset: u64, data_len: u8 },
     /// Memory-only emulation region (no direct device access)
@@ -97,22 +104,20 @@ struct VfioBarRegionInfo {
 /// Information about VFIO MMIO region.
 #[derive(Clone, Debug)]
 pub struct VfioRegion {
+    // 动态的
     pub(crate) index: u32,
     pub(crate) start: u64,
+    pub(crate) enable: bool,    // guest 是否可以访问（PS bar reporgram 需要写依次两个dword途中不能访问bar）
 
+    // 静态的
     pub(crate) flags: u32,
     pub(crate) size: u64,
     pub(crate) offset: u64,
     pub(crate) caps: Vec<VfioRegionInfoCap>,
 }
-/// VfioPcieMemoryRecognizer: Real implementation for VFIO PCIe devices.
-///
-/// This implementation parses BAR regions and MSI-X layouts from a VFIO device
-/// and provides region lookup for memory access routing.
-///
-/// The regions are stored sorted by GPA to enable efficient binary search.
+/// VfioPcieMemoryRecognizer: 识别内存访问行为
 pub struct VfioPcieMemoryRecognizer {
-    /// Optional cached MSIX capability register index
+    bar_region_reprogramming_in_progress: [Option<u32>; NUM_BAR_NUMS], // 记录正在被重编程的BAR索引，期间该BAR被视为不可访问，值为寄存器中的旧值
     bar_region_info: Vec<VfioRegion>,
 
     msix_clt_reg_offset_start: usize,
@@ -137,6 +142,7 @@ impl VfioPcieMemoryRecognizer {
             let region_info = VfioRegion{
                 index: i,
                 start: 0,
+                enable: false,
                 flags: vfio_dev.get_region_flags(i),
                 size: vfio_dev.get_region_size(i),
                 offset: vfio_dev.get_region_offset(i),
@@ -158,6 +164,7 @@ impl VfioPcieMemoryRecognizer {
 
             // 找到 MSI-X 能力，初始化完整字段
             Self {
+                bar_region_reprogramming_in_progress: [None; NUM_BAR_NUMS],
                 bar_region_info,
                 msix_clt_reg_offset_start,
                 msix_clt_reg_offset_end,
@@ -169,6 +176,7 @@ impl VfioPcieMemoryRecognizer {
         } else {
             // 未找到 MSI-X 能力，寄存器偏移置 0，位置为 None
             Self {
+                bar_region_reprogramming_in_progress: [None; NUM_BAR_NUMS],
                 bar_region_info,
                 msix_clt_reg_offset_start: 0,
                 msix_clt_reg_offset_end: 0,
@@ -180,6 +188,7 @@ impl VfioPcieMemoryRecognizer {
         }
     }
 
+    /// 解析 MSI-X 配置空间，返回 Table 和 PBA 的 BAR 位置信息
 
     fn find_msix_cap_offset(vfio: &dyn Vfio) -> Option<usize> {
 
@@ -203,7 +212,6 @@ impl VfioPcieMemoryRecognizer {
         None
     }
 
-    /// 解析 MSI-X 配置空间，返回 Table 和 PBA 的 BAR 位置信息
     pub(crate) fn msix_layout_for_bar(
         vfio: &dyn Vfio,
         msix_cap_offset: u32,
@@ -241,14 +249,27 @@ impl VfioPcieMemoryRecognizer {
         (table_location, pba_location)
     }
 
+    /// 根据访问地址查找对应的 VFIO 区域信息
     fn find_region(&self, addr: u64) -> Option<VfioRegion> {
         for region in self.bar_region_info.iter() {
-            if addr >= region.start && addr < region.start + region.size
+            if addr >= region.start && addr < region.start + region.size && region.enable
             {
                 return Some(region.clone());
             }
         }
         None
+    }
+
+    // 访问控制 ————————————————————————————————————————————————————————————————
+    fn disable_bar_region(&mut self, index: usize) {
+        if let Some(region) = self.bar_region_info.get_mut(index) {
+            region.enable = false;
+        }
+    }
+    fn enable_bar_region(&mut self, index: usize) {
+        if let Some(region) = self.bar_region_info.get_mut(index) {
+            region.enable = true;
+        }
     }
 
     fn add_region_need_discard(&mut self, region: BarLocation) {
@@ -341,6 +362,10 @@ impl VfioPcieMemoryRecognizer {
         let mut res = Vec::new();
 
         for region in &self.bar_region_info {
+            if !region.enable {
+                continue;
+            }
+
             let mut ranges = vec![(region.start, region.start.saturating_add(region.size))];
 
             for blocked in self
@@ -388,8 +413,6 @@ impl VfioPcieMemoryRecognizer {
         res.sort_by_key(|entry| (entry.bar_index, entry.offset));
         res
     }
-
-
 
     // 辅助函数 ————————————————————————————————————————————————————————————————
     fn access_span(access_type: &IovaAccessType) -> Option<(u64, usize)> {
@@ -484,9 +507,17 @@ pub trait MemoryRecognizer: Send + Sync {
     fn parse_bar_read<'a>(&self, base: u64, offset: u64, data: &'a mut [u8]) -> Vec<AccessResolution<'a>>;
     fn parse_bar_write<'a>(&self, base: u64, offset: u64, data: &'a [u8]) -> Vec<AccessResolution<'a>>;
 
-    fn on_bar_reprogrammed(&mut self, bar_idx: u8, old_gpa: u64, new_gpa: u64);
 
     fn find_region(&self, addr: u64) -> Option<VfioRegion>;
+
+
+    fn on_bar_reprogrammed(&mut self, bar_idx: u8, old_gpa: u64, new_gpa: u64);
+
+    fn detect_bar_reprogramming(
+        &mut self,
+        reg_idx: usize,
+        data: &[u8],
+    ) -> Option<BarReprogrammingParams>;
 
     fn get_region_can_passthrough(&self) -> Vec<BarLocation>;
 
@@ -598,9 +629,70 @@ impl MemoryRecognizer for VfioPcieMemoryRecognizer{
         self.filter_bar_region_access(access_region.index as u8, res)
     }
   
+    // BAR重编程 ))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))
+
     fn on_bar_reprogrammed(&mut self, bar_idx: u8, old_gpa: u64, new_gpa: u64){
         if let Some(region) = self.bar_region_info.iter_mut().find(|region| region.index == bar_idx as u32) {
             region.start = new_gpa;
+        }
+    }
+
+    fn detect_bar_reprogramming(
+        &mut self,
+        reg_idx: usize,
+        data: &[u8],
+    ) -> Option<BarReprogrammingParams>{
+        // TODO 函数中的分支需要优化
+
+        if (PCI_CONFIG_BAR0_INDEX..PCI_CONFIG_BAR0_INDEX + NUM_BAR_NUMS).contains(&reg_idx)
+            || reg_idx == PCI_ROM_EXP_BAR_INDEX && data.len() == 4
+        {
+            let index = reg_idx - PCI_CONFIG_BAR0_INDEX;
+            
+            let new_addr = u32::from_le_bytes(data.try_into().unwrap()) & BAR_MEM_ADDR_MASK;
+            self.bar_region_info[index].start = new_addr as u64;
+
+            let region = self.bar_region_info.get(index)?;
+            let old_addr = region.start as u32;
+
+
+            let is_64bit_bar = region.flags & VFIO_REGION_INFO_FLAG_64BIT != 0;
+            if is_64bit_bar {
+
+                let (pair_bar_rag_index1, pair_bar_rag_index2) = 
+                    if index % 2 == 0 { (index, index + 1) } else { (index - 1, index) };
+
+                self.bar_region_reprogramming_in_progress[index] = Some(region.start as u32);
+
+                if let Some(old_pair_addr1) = self.bar_region_reprogramming_in_progress[pair_bar_rag_index1] && 
+                    let Some(old_pair_addr2) = self.bar_region_reprogramming_in_progress[pair_bar_rag_index2] {
+
+                    let old_bar_addr = (old_pair_addr2 as u64) << 32 | (old_pair_addr1 as u64);
+                    let new_bar_addr = (self.bar_region_info[pair_bar_rag_index2].start as u64) << 32 | (self.bar_region_info[pair_bar_rag_index1].start as u64);
+                    Some(BarReprogrammingParams {
+                            old_base: old_bar_addr,
+                            new_base: new_bar_addr,
+                            len: region.size
+                    })
+                } else {
+                    // 重编程尚未完成，说明用户正在以 64bit 模式重编程这个 BAR 对，应继续等待下一个写入完成重编程流程，先取消映射
+                    let old_bar_addr = if index % 2 == 0 {
+                        (self.bar_region_info[index + 1].start as u64) << 32 | (old_addr as u64)
+                    } else {
+                        (old_addr as u64) << 32 | (self.bar_region_info[index - 1].start as u64)
+                    };
+                    Some(BarReprogrammingParams {
+                            old_base: old_bar_addr,
+                            new_base: 0,
+                            len: 0
+                    })
+                }
+            } else {
+                info!("Detected 32bit BAR{} reprogramming 当前不支持", index);
+                None
+            }
+        } else {
+            None
         }
     }
 
@@ -614,4 +706,18 @@ impl MemoryRecognizer for VfioPcieMemoryRecognizer{
 
     }
 
+}
+
+
+impl VfioPcieMemoryRecognizer {
+    pub fn preallocated_bar_region_address(&mut self, mmio64_memory: &mut AddressAllocator) {
+        for region in self.bar_region_info.iter_mut() {
+            if !region.enable && region.size > 0 && region.start == 0 {
+                // 预分配一个地址，暂不考虑分配失败的情况
+                let addr = mmio64_memory.allocate(region.size, region.size, vm_allocator::AllocPolicy::FirstMatch).unwrap().start();
+                region.start = addr;
+                region.enable = true;
+            }
+        }
+    }
 }
