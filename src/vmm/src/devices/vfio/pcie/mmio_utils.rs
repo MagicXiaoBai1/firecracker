@@ -4,6 +4,7 @@ use core::ffi::c_int;
 use core::ptr::null_mut;
 use std::io::{Error, ErrorKind};
 use std::os::fd::{AsRawFd as _, BorrowedFd};
+use log::error;
 use vfio_bindings::bindings::vfio::*;
 
 use crate::pci::{DeviceRelocation, DeviceRelocationError, PciDevice, BarReprogrammingParams};
@@ -93,7 +94,7 @@ fn map_mmio_regions(
     }
     let addr = unsafe { libc::mmap(null_mut(), len, prot, libc::MAP_SHARED, fd.as_raw_fd(), offset) };
     if addr == libc::MAP_FAILED {
-        Error!("mmap failed for region {}: {}", bar_region_id, Error::last_os_error());    // TODO debug ok后删掉
+        error!("mmap failed for region {}: {}", bar_region_id, Error::last_os_error());    // TODO debug ok后删掉
         return Err(Box::new(Error::new(ErrorKind::Other, "mmap failed")));
     }
     let region = kvm_userspace_memory_region{
