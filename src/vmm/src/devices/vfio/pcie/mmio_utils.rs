@@ -6,10 +6,9 @@ use std::io::{Error, ErrorKind};
 use std::os::fd::{AsRawFd as _, BorrowedFd};
 use vfio_bindings::bindings::vfio::*;
 
-use crate::pci::{DeviceRelocation, DeviceRelocationError, PciDevice};
+use crate::pci::{DeviceRelocation, DeviceRelocationError, PciDevice, BarReprogrammingParams};
 use libc::size_t;
 use crate::devices::vfio::pcie::vfio::{Vfio, VfioError};
-use crate::pci::{BarReprogrammingParams, DeviceRelocationError};
 use crate::vstate::bus::BusDeviceSync;
 use crate::{EventManager, Vm};
 
@@ -43,6 +42,8 @@ impl Vm {
 
     fn unmap_mmio_regions(
         &self,
+        pci_dev: & dyn PciDevice,
+        
         guest_base: u64,
         bar_region_id: usize,
         offset: u64,
