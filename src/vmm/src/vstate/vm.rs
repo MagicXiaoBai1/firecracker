@@ -27,6 +27,7 @@ use vmm_sys_util::eventfd::EventFd;
 
 pub use crate::arch::{ArchVm as Vm, ArchVmError, VmState};
 use crate::arch::{GSI_MSI_END, host_page_size};
+use crate::devices::vfio::pcie::dma_engine::DmaEngine;
 use crate::devices::vfio::pcie::vfio_device::VfioPciDevice;
 use crate::logger::info;
 use crate::pci::{DeviceRelocation, DeviceRelocationError, PciDevice};
@@ -64,6 +65,9 @@ pub struct VmCommon {
     pub resource_allocator: Mutex<ResourceAllocator>,
     /// MMIO bus
     pub mmio_bus: Arc<Bus>,
+
+    // TODO 在这里放个 DmaEngine
+    pub dma_engine: DmaEngine,
 }
 
 /// Errors associated with the wrappers over KVM ioctls.
