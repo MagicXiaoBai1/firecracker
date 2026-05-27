@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use crate::vstate::memory::GuestMemoryMmap;
 use log::debug;
 use vfio_ioctls::VfioContainer;
@@ -8,37 +8,41 @@ use vm_memory::GuestAddress;
 ///
 /// TODO: 目前为框架 stub；实际实现应调用 `vfio_container.vfio_dma_map` 并在失败时回滚。
 pub struct DmaEngine {
-    pub containers: Vec<Arc<VfioContainer>>,
+    pub containers: Mutex<Vec<Arc<VfioContainer>>>,
     // mapped regions: (gpa_start, len)
-    pub mapped_guest_regions: Vec<(u64, u64)>,  // TODO 这个对象要加锁，所有成员函数要从 &mut self 改为 &self
+    pub mapped_guest_regions: Mutex<Vec<(u64, u64)>>,
 }
 
 impl DmaEngine {
     pub fn new() -> Self {
         Self {
-            containers: Vec::new(),
-            mapped_guest_regions: Vec::new(),
+            containers: Mutex::new(Vec::new()),
+            mapped_guest_regions: Mutex::new(Vec::new()),
         }
     }
 
     /// 注册一个 vfio container，用于后续的 dma_map 操作
-    pub fn register_container(&mut self, container: Arc<VfioContainer>) {
+    pub fn register_container(&self, container: Arc<VfioContainer>) {
         // TODO: check if already registered and handle accordingly
-        self.containers.push(container);
+        let mut containers = self.containers.lock().unwrap();
+        containers.push(container);
     }
 
     /// 对当前 guest memory 的所有 region 执行 vfio_dma_map
-    pub fn map_guest_memory(&mut self, gpa: GuestAddress, len: u64, usr_addr: u64) -> Result<(), ()> {
+    pub fn map_guest_memory(&self, gpa: GuestAddress, len: u64, usr_addr: u64) -> Result<(), ()> {
         // 1. 检查是否重复映射
-        for &(start, l) in &self.mapped_guest_regions {
+        let mut mapped_guest_regions = self.mapped_guest_regions.lock().unwrap();
+        for &(start, l) in mapped_guest_regions.iter() {
             if start == gpa.0 && l == len {
                 return Err(());
             }
         }
 
-        self.mapped_guest_regions.push((gpa.0, len));
-        
-        for container in &self.containers {
+        mapped_guest_regions.push((gpa.0, len));
+        drop(mapped_guest_regions);
+
+        let containers = self.containers.lock().unwrap().clone();
+        for container in &containers {
             // vfio_dma_map is unsound and ought to be marked as unsafe
             #[allow(unused_unsafe)]
             // SAFETY: GuestMemoryMmap guarantees that region points
@@ -57,11 +61,15 @@ impl DmaEngine {
         }
         Ok(())
     }
-    pub fn unmap_guest_memory(&mut self, gpa: GuestAddress, len: u64, usr_addr: u64) -> Result<(), ()> {
-        self.mapped_guest_regions.retain(|&(start, region_len)| {
+    pub fn unmap_guest_memory(&self, gpa: GuestAddress, len: u64, usr_addr: u64) -> Result<(), ()> {
+        let mut mapped_guest_regions = self.mapped_guest_regions.lock().unwrap();
+        mapped_guest_regions.retain(|&(start, region_len)| {
             !(start == gpa.0 && region_len == len)
         });
-        for container in &self.containers {
+        drop(mapped_guest_regions);
+
+        let containers = self.containers.lock().unwrap().clone();
+        for container in &containers {
             // vfio_dma_map is unsound and ought to be marked as unsafe
             #[allow(unused_unsafe)]
             // SAFETY: GuestMemoryMmap guarantees that region points
@@ -81,9 +89,12 @@ impl DmaEngine {
     }
 
     /// 取消所有已映射的 DMA 区域
-    pub fn unmap_all(&mut self) -> Result<(), ()> {
-        for &(gpa, len) in &self.mapped_guest_regions {
-            for container in &self.containers {
+    pub fn unmap_all(&self) -> Result<(), ()> {
+        let mapped_guest_regions = self.mapped_guest_regions.lock().unwrap().clone();
+        let containers = self.containers.lock().unwrap().clone();
+
+        for &(gpa, len) in &mapped_guest_regions {
+            for container in &containers {
                 // vfio_dma_map is unsound and ought to be marked as unsafe
                 #[allow(unused_unsafe)]
                 // SAFETY: GuestMemoryMmap guarantees that region points
@@ -100,7 +111,7 @@ impl DmaEngine {
                     });
             }
         }
-        self.mapped_guest_regions.clear();
+        self.mapped_guest_regions.lock().unwrap().clear();
         Ok(())
     }
 }
