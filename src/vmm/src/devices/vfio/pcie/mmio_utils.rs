@@ -13,8 +13,6 @@ use crate::devices::vfio::pcie::vfio::{Vfio, VfioError};
 use crate::vstate::bus::BusDeviceSync;
 use crate::{EventManager, Vm};
 
-use super::configuration::VfioBarRegionInfo;
-use super::vfio::VfioBarOps;
 use kvm_bindings::{
 kvm_userspace_memory_region,
 };

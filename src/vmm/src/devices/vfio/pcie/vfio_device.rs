@@ -6,6 +6,7 @@ use std::io::{ErrorKind, Write};
 use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU32, AtomicUsize, Ordering};
 use std::sync::{Arc, Barrier, Mutex};
 use log::debug;
+use crate::devices::vfio::pcie::vfio_common::VfioCommon;
 use crate::utils::u64_to_usize;
 use crate::{EventManager, Vm};
 
@@ -34,7 +35,7 @@ use crate::vstate::interrupts::{InterruptError, MsixVectorGroup};
 use crate::vstate::memory::GuestMemoryMmap;
 use crate::vstate::bus::BusDevice;
 use vfio_ioctls::{VfioContainer, VfioDevice, VfioDeviceFd, VfioOps};
-use crate::devices::vfio::pcie::vfio::{Vfio, VfioCommon, VfioDeviceWrapper};
+use crate::devices::vfio::pcie::vfio::{Vfio, VfioDeviceWrapper};
 
 
 
@@ -57,6 +58,7 @@ impl PciSubclass for PciVfioSubclass {
     }
 }
 
+/// 该对象需要对外提供线程安全的接口，其内部一般不考虑线程安全，只做最基础的检测
 pub struct VfioPciDevice {
     id: String,
 
@@ -66,12 +68,6 @@ pub struct VfioPciDevice {
     // vfio设备共性部分
     common: VfioCommon,
 
-    // virtual machine
-    vm: Arc<Vm>,
-
-    // 资源
-    vfio_container: Arc<VfioContainer>,
-    vfio_device: Arc<VfioDevice>,
 }
 
 
@@ -87,19 +83,16 @@ impl VfioPciDevice {
         let vfio_wrapper = VfioDeviceWrapper::new(Arc::clone(&vfio_device));
         let common: VfioCommon = VfioCommon::new(
             pci_device_bdf.into(),
-         &PciVfioSubclass::VfioSubclass,
-           Arc::new(vfio_wrapper) as Arc<dyn Vfio>, 
-           msix_vectors,
-           vm.clone(),
+            Box::new(PciVfioSubclass::VfioSubclass),
+            vfio_wrapper, 
+            msix_vectors,
+            vfio_container,
         );
 
         Self {
             id: format!("vfio-pci-{}", pci_device_bdf),
             pci_device_bdf: pci_device_bdf,
             common: common,
-            vm: Arc::clone(&vm),
-            vfio_container: vfio_container,
-            vfio_device: vfio_device,
         }
     }
 }
@@ -186,14 +179,3 @@ impl BusDevice for VfioPciDevice {
     }
 }
 
-
-impl fmt::Debug for VfioPciDevice {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("VfioPciDevice")
-            .field("id", &self.id)
-            .field("pci_device_bdf", &self.pci_device_bdf)
-            .field("common", &self.common)
-            // 跳过未实现 Debug 的字段
-            .finish()
-    }
-}

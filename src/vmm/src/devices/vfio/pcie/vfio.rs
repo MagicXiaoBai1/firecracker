@@ -9,8 +9,6 @@ use std::os::unix::io::AsRawFd;
 use log::{debug, error, info, warn};
 use thiserror::Error;
 
-use super::configuration::{VfioBarRegionInfo, VfioPcieConfiguration};
-use super::mmio_utils::{BarRegionAccessRequest, BlackStatus, VfioMmioEngine};
 use super::memory_recognizer::{MemoryRecognizer, VfioPcieMemoryRecognizer};
 use crate::pci::msix::{MsixCap, MsixConfig, MsixConfigState};
 use crate::pci::{BarReprogrammingParams, DeviceRelocationError, PciDevice};
@@ -116,42 +114,15 @@ pub(crate) trait Vfio: Send + Sync {
     }
 }
 
-pub(crate) trait VfioBarOps {
-    fn move_bar(
-        &mut self,
-        old_base: u64,
-        new_base: u64,
-        len: u64,
-    ) -> Result<(), DeviceRelocationError>;
-
-    fn allocate_bars(
-        &mut self,
-        guest_base: u64,
-        bar_region_id: usize,
-        offset: u64,
-        len: u64,
-    ) -> Result<(), Box<dyn std::error::Error>>;
-
-    fn free_bars(&mut self, _guest_base: u64, _len: u64) -> Result<(), Box<dyn std::error::Error>>;
-
-    fn read_bar(&self, base: u64, offset: u64, data: &mut [u8]);
-
-    fn blacklist_filter(
-        &self,
-        bar_region_id: usize,
-        len: u64,
-        offset: u64,
-    ) -> Vec<BarRegionAccessRequest>;
-
-    fn write_bar(&self, base: u64, offset: u64, data: &[u8]) -> Option<Arc<Barrier>>;
-}
 
 pub(crate) trait VfioMsixOps {
-    fn read_table(&self, offset: u64, data: &mut [u8]);
+    fn read_table(&self, index: u16, offset: u64, data: &mut [u8]);
 
-    fn write_table(&mut self, offset: u64, data: &[u8]);
+    fn write_table(&mut self, index: u16, offset: u64, data: &[u8]);
 
     fn set_msg_ctl(&mut self, reg: u16);
+
+    fn get_msg_ctl(&self) -> u16 ;
 
     fn read_pba(&self, offset: u64, data: &mut [u8]);
 
@@ -219,3 +190,12 @@ impl Vfio for VfioDeviceWrapper {
 const PCI_ROM_EXP_BAR_INDEX: usize = 12;
 // PCI config register size (4 bytes).
 const PCI_CONFIG_REGISTER_SIZE: usize = 4;
+
+impl fmt::Debug for VfioDeviceWrapper {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // 直接输出你指定的字符串
+        write!(f, "VfioDeviceWrapper ")
+    }
+}
+
+

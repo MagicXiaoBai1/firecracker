@@ -3,6 +3,7 @@ use crate::vstate::memory::GuestMemoryMmap;
 use log::debug;
 use vfio_ioctls::VfioContainer;
 use vm_memory::GuestAddress;
+use std::fmt;
 
 /// DmaEngine负责将guest memory挂载到vfio container
 ///
@@ -113,5 +114,16 @@ impl DmaEngine {
         }
         self.mapped_guest_regions.lock().unwrap().clear();
         Ok(())
+    }
+}
+
+
+impl fmt::Debug for DmaEngine {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("DmaEngine")
+         // 只包含这一个字段
+         .field("mapped_guest_regions", &self.mapped_guest_regions)
+         // 不打印 containers
+         .finish()
     }
 }

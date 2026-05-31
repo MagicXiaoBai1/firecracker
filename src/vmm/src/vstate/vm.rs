@@ -147,6 +147,7 @@ impl Vm {
             interrupts: Mutex::new(HashMap::with_capacity(GSI_MSI_END as usize + 1)),
             resource_allocator: Mutex::new(ResourceAllocator::new()),
             mmio_bus: Arc::new(Bus::new()),
+            dma_engine: DmaEngine::new(),
         })
     }
 
@@ -551,13 +552,21 @@ impl DeviceRelocation for Vm {
         _pci_dev: &mut dyn PciDevice,
     ) -> Result<(), DeviceRelocationError> {
         // TODO
-         if _pci_dev.need_bar_relocation_on_vm() {
-             // 目前仅vfio设备支持BAR重定位，且重定位后需要修改设备在pci bus中的注册情况
-             // 1. 从 self.common.resource_allocator.mmio64_memory 中释放旧的地址资源，并分配新的地址资源
-             // 2. 从 self.common.mmio_bus 中注销设备，再以新的地址注册设备
-             // 3. 调用设备的 move_bar 方法，完成设备内部的BAR重定位
-             // 注意：有时 _len 为 0 此时就撤销那个bar空间的映射，让guest无法访问那个空间
-         }
+        if _pci_dev.need_bar_relocation_on_vm() {
+            // 目前仅vfio设备支持BAR重定位，且重定位后需要修改设备在pci bus中的注册情况
+            // _len 不为 0 时：移动bar空间：
+            // 1. 从 self.common.resource_allocator.mmio64_memory 中释放旧的地址资源，并分配新的地址资源
+            // 2. 从 self.common.mmio_bus 中注销设备，再以新的地址注册设备
+            // 3. 调用mmio utils中的 unmap_mmio_regions 和 map_mmio_regions
+            // 4. 调用DMA engine更新设备可直通访问的GPA
+            // 3. 调用设备的 move_bar 方法，完成设备内部的BAR重定位（主要是通知）
+            // _len 为 0 时：就撤销那个bar空间的映射，让guest无法访问那个空间
+            // 1. 从 self.common.resource_allocator.mmio64_memory 中释放旧的地址资源
+            // 2. 从 self.common.mmio_bus 中注销设备
+            // 3. 调用mmio utils中的 unmap_mmio_regions
+            // 4. 调用设备的 move_bar 方法，完成设备内部的BAR重定位（主要是通知）
+
+        }
         Err(DeviceRelocationError::NotSupported)
     }
 }

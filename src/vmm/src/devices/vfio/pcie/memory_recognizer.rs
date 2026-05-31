@@ -40,6 +40,13 @@ impl BarLocation {
     }
 }
 
+pub enum IovaAcccessRawType<'a>{
+    WriteConfigRegister {reg_idx: usize, offset: u64, data: &'a [u8]},
+    ReadConfigRegister {reg_idx: usize},
+    ReadBar {base: u64, offset: u64, data: &'a mut [u8]},
+    WriteBar {base: u64, offset: u64, data: &'a [u8]},
+}
+
 /// IOVA types recognized from a VFIO device
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum IovaAccessType {
@@ -93,13 +100,6 @@ pub struct AccessResolution<'a> {
     pub access_type: IovaAccessType,
     pub data: IovaAccessData<'a>,
 }
-#[derive(Debug, Default, Clone, Copy)]
-struct VfioBarRegionInfo {
-    pub addr: u32,
-    pub size: u32,
-    pub used: bool,
-}
-
 
 /// Information about VFIO MMIO region.
 #[derive(Clone, Debug)]
@@ -116,6 +116,7 @@ pub struct VfioRegion {
     pub(crate) caps: Vec<VfioRegionInfoCap>,
 }
 /// VfioPcieMemoryRecognizer: 识别内存访问行为
+#[derive(Debug)]
 pub struct VfioPcieMemoryRecognizer {
     bar_region_reprogramming_in_progress: [Option<u32>; NUM_BAR_NUMS], // 记录正在被重编程的BAR索引，期间该BAR被视为不可访问，值为寄存器中的旧值
     bar_region_info: Vec<VfioRegion>,
@@ -132,7 +133,7 @@ pub struct VfioPcieMemoryRecognizer {
 
 impl VfioPcieMemoryRecognizer {
     /// Create a new recognizer with the given regions.
-    pub fn new(vfio_device: VfioDeviceWrapper) -> Self {
+    pub fn new(vfio_device: &VfioDeviceWrapper) -> Self {
 
         let vfio_dev = vfio_device.get_vfio_device();
         // 1. Parse BAR regions from VFIO device
@@ -153,14 +154,14 @@ impl VfioPcieMemoryRecognizer {
 
         
         // 2. 查找并初始化 MSI-X 相关配置
-        if let Some(msix_cap_offset) = Self::find_msix_cap_offset(&vfio_device) {
+        if let Some(msix_cap_offset) = Self::find_msix_cap_offset(vfio_device) {
             // MSI-X Control 寄存器的配置空间偏移范围
             let msix_clt_reg_offset_start = msix_cap_offset + 2;
             let msix_clt_reg_offset_end = msix_clt_reg_offset_start + 2;
 
             // 获取 MSI-X Table / PBA 的 BAR 位置信息
             let (msix_vector_location, msix_pba_location) =
-                Self::msix_layout_for_bar(&vfio_device, msix_cap_offset as u32);
+                Self::msix_layout_for_bar(vfio_device, msix_cap_offset as u32);
 
             // 找到 MSI-X 能力，初始化完整字段
             Self {
@@ -497,6 +498,13 @@ impl VfioPcieMemoryRecognizer {
     }
 
 
+    pub(crate) fn get_bar_region_size(&self) -> [u32; NUM_BAR_NUMS] {
+        let mut sizes = [0u32; NUM_BAR_NUMS];
+        for region in &self.bar_region_info {
+            sizes[region.index as usize] = region.size as u32;
+        }
+        sizes
+    }
 }
 
 
@@ -511,7 +519,7 @@ pub trait MemoryRecognizer: Send + Sync {
     fn find_region(&self, addr: u64) -> Option<VfioRegion>;
 
 
-    fn on_bar_reprogrammed(&mut self, bar_idx: u8, old_gpa: u64, new_gpa: u64);
+    fn on_bar_reprogrammed(&mut self, old_gpa: u64, new_gpa: u64);
 
     fn detect_bar_reprogramming(
         &mut self,
@@ -631,9 +639,12 @@ impl MemoryRecognizer for VfioPcieMemoryRecognizer{
   
     // BAR重编程 ))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))
 
-    fn on_bar_reprogrammed(&mut self, bar_idx: u8, old_gpa: u64, new_gpa: u64){
-        if let Some(region) = self.bar_region_info.iter_mut().find(|region| region.index == bar_idx as u32) {
-            region.start = new_gpa;
+    fn on_bar_reprogrammed(&mut self, old_gpa: u64, new_gpa: u64){
+        let bar_index = self.bar_region_info.iter().position(|region| region.start == old_gpa);
+        if let Some(bar_index) = bar_index {
+            if let Some(region) = self.bar_region_info.iter_mut().find(|region| region.index == bar_index as u32) {
+                region.start = new_gpa;
+            }
         }
     }
 
@@ -662,8 +673,9 @@ impl MemoryRecognizer for VfioPcieMemoryRecognizer{
                 let (pair_bar_rag_index1, pair_bar_rag_index2) = 
                     if index % 2 == 0 { (index, index + 1) } else { (index - 1, index) };
 
-                self.bar_region_reprogramming_in_progress[index] = Some(region.start as u32);
+                self.bar_region_reprogramming_in_progress[index] = Some(region.start as u32);  // 记录变化
 
+                // 判断变化是否完整（即两个相邻的 BAR 都被写入了新地址），如果完整则返回重编程参数，否则先返回旧地址并继续等待下一个写入完成重编程流程
                 if let Some(old_pair_addr1) = self.bar_region_reprogramming_in_progress[pair_bar_rag_index1] && 
                     let Some(old_pair_addr2) = self.bar_region_reprogramming_in_progress[pair_bar_rag_index2] {
 
