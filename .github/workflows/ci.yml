@@ -1,0 +1,85 @@
+name: CI
+
+# M0: Linux CI —— build + cargo test（HLD §6.3 回归门禁的执行点）。
+#
+# 目标选择（有意为之，2026-10-14 实测定稿）：
+# - x86_64 (host gnu)  : cargo test --workspace —— 单元测试 + 全量编译
+# - aarch64 (gnu cross): cargo check --workspace —— D11：NPU 平台为 aarch64，
+#   保证 cfg(target_arch="aarch64") 路径（后续 NISV/kvm/vcpu 代码）可编译。
+#   用 check 而非 build：避免交叉链接对 arm64 版 libseccomp 的 multiarch 依赖，
+#   CI 环境全部 apt 可得（已本地验证完整交叉 build 亦可通过，见 docs/vfio/README.md）。
+# - musl 静态产物不在 CI 内构建：seccompiler 链接 libseccomp 且 aws-lc-sys /
+#   userfaultfd-sys 需 musl C 工具链，上游通过 devtool 容器解决；部署二进制在
+#   NPU 服务器上按上游 devtool 流程构建。
+#
+# 以 root 运行测试（对齐上游 CI 容器行为）：tap 设备创建需要 CAP_NET_ADMIN，
+# jailer 测试需要 mknod/chroot，KVM 测试需要 /dev/kvm 访问。
+# 注意：仓库 .cargo/config.toml 自设 target-dir = build/cargo_target，缓存路径
+# 以此为准；root 构建后需 chown 回 runner 用户，否则缓存保存失败。
+#
+# 依赖：libclang-dev（userfaultfd-sys 的 bindgen）、cmake（aws-lc-sys 构建
+# aws-lc C 代码）、libseccomp-dev（seccompiler 链接）、gcc/g++-aarch64-linux-gnu
+# （交叉 build script 的 cc 检测）。
+
+on:
+  push:
+    branches: [main, vfio/series]
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  unit-tests:
+    name: Unit tests (x86_64, root)
+    runs-on: ubuntu-latest
+    steps:
+      - name: "Checkout repository"
+        uses: actions/checkout@v4
+      - name: "Install build dependencies"
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libseccomp-dev libclang-dev cmake
+      - name: "Install pinned Rust toolchain"
+        uses: dtolnay/rust-toolchain@1.93.0
+      - name: "Cache cargo build"
+        uses: actions/cache@v4
+        with:
+          path: build/cargo_target
+          key: unit-tests-v1-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: unit-tests-v1-
+      - name: "Run unit tests (as root: tap/jailer/KVM need privileges)"
+        run: sudo -E env "PATH=$PATH" "HOME=$HOME" cargo test --workspace --locked --no-fail-fast
+      - name: "Restore target dir ownership for caching"
+        if: always()
+        run: sudo chown -R $(id -u):$(id -g) build/cargo_target
+
+  check-aarch64:
+    name: Check (aarch64 cross)
+    runs-on: ubuntu-latest
+    steps:
+      - name: "Checkout repository"
+        uses: actions/checkout@v4
+      - name: "Install build dependencies"
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libclang-dev cmake gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
+      - name: "Install pinned Rust toolchain"
+        uses: dtolnay/rust-toolchain@1.93.0
+        with:
+          targets: aarch64-unknown-linux-gnu
+      - name: "Cache cargo build"
+        uses: actions/cache@v4
+        with:
+          path: build/cargo_target
+          key: check-aarch64-v1-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: check-aarch64-v1-
+      - name: "Check workspace for aarch64"
+        env:
+          CC_aarch64_unknown_linux_gnu: aarch64-linux-gnu-gcc
+          CXX_aarch64_unknown_linux_gnu: aarch64-linux-gnu-g++
+          AR_aarch64_unknown_linux_gnu: aarch64-linux-gnu-ar
+        run: cargo check --workspace --target aarch64-unknown-linux-gnu --locked
