@@ -224,12 +224,18 @@ pub fn build_microvm_for_boot(
             event_manager,
         )?;
     }
-    attach_vfio_pcie_device(
-        &mut device_manager,
-        &vm,
-        &mut boot_cmdline,
-        event_manager,
-    )?;
+    // 过渡态（M1，对齐 worked 的驱动方式）：由 FC_VFIO_PCI_BDF 环境变量驱动直通；
+    // 未设置时跳过 attach（无直通设备的常规启动与测试路径）。
+    // M2 将替换为 PUT /vfio-devices/{id} API 配置（HLD §3.2）。
+    if let Ok(host_bdf) = std::env::var("FC_VFIO_PCI_BDF") {
+        attach_vfio_pcie_device(
+            &mut device_manager,
+            &vm,
+            &mut boot_cmdline,
+            event_manager,
+            &host_bdf,
+        )?;
+    }
     attach_block_devices(
         &mut device_manager,
         &vm,
@@ -769,11 +775,7 @@ pub use kvm_bindings::{
     kvm_device_attr as DeviceAttr, kvm_device_type_KVM_DEV_TYPE_VFIO, kvm_guest_debug,
     kvm_irq_routing, kvm_irq_routing_entry, kvm_mp_state, kvm_run, kvm_userspace_memory_region,
 };
-use crate::vstate::memory::{
-    GuestMemory, GuestMemoryExtension, GuestMemoryMmap, GuestMemoryRegion, GuestMemoryState,
-    GuestRegionMmapExt, MemoryError,
-};
-use crate::devices::vfio::pcie::vfio_device::VfioPciDevice;
+use crate::vstate::memory::{GuestMemory, GuestMemoryRegion, GuestRegionMmapExt};
 
 #[allow(unused_variables)]
 fn attach_vfio_pcie_device(
@@ -781,6 +783,7 @@ fn attach_vfio_pcie_device(
     vm: &Arc<Vm>,
     cmdline: &mut LoaderKernelCmdline,
     event_manager: &mut EventManager,
+    host_bdf: &str,
 ) -> Result<(), StartMicrovmError>{
     // TODO
     // 1. 创建 vfio_container、vfio_group
@@ -794,11 +797,8 @@ fn attach_vfio_pcie_device(
     // -. 操作event_manager
 
 
-    let vfio_name = "test_vfio";
-    debug!("add_vfio_device.vfio_name: {:?}", vfio_name);
-    let pci_segment_id = 0;
-    let device_path = "/sys/bus/pci/devices/0000:ba:02.0";
-    debug!("add_vfio_device.pci_segment_id: {:?}  .device_path: {:?}", pci_segment_id, device_path);
+    debug!("add_vfio_device.host_bdf: {:?}", host_bdf);
+    let device_path = format!("/sys/bus/pci/devices/{}", host_bdf);
 
 
 

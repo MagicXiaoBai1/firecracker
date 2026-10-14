@@ -8,11 +8,8 @@ use std::sync::{Arc, Mutex};
 
 use event_manager::{MutEventSubscriber, SubscriberOps};
 use log::{debug, error, warn};
-use pci::PciBdf;
 use serde::{Deserialize, Serialize};
-use vfio_ioctls::{
-    VfioContainer, VfioDevice, VfioIrq, VfioRegionInfoCap, VfioRegionSparseMmapArea,
-};
+use vfio_ioctls::{VfioContainer, VfioDevice};
 use super::persist::MmdsState;
 use crate::devices::pci::PciSegment;
 use crate::devices::virtio::balloon::Balloon;
@@ -31,7 +28,7 @@ use crate::devices::virtio::rng::persist::{EntropyConstructorArgs, EntropyState}
 use crate::devices::virtio::transport::pci::device::{
     CAPABILITY_BAR_SIZE, VirtioPciDevice, VirtioPciDeviceError, VirtioPciDeviceState,
 };
-use crate::devices::vfio::pcie::vfio_device::{VfioPciDevice, VfioPciDeviceError};
+use crate::devices::vfio::pcie::vfio_device::VfioPciDevice;
 
 use crate::devices::virtio::vsock::persist::{
     VsockConstructorArgs, VsockState, VsockUdsConstructorArgs,
@@ -45,7 +42,6 @@ use crate::vmm_config::mmds::MmdsConfigError;
 use crate::vstate::bus::BusError;
 use crate::vstate::interrupts::InterruptError;
 use crate::vstate::memory::GuestMemoryMmap;
-use crate::vstate::vm;
 use crate::{EventManager, Vm};
 
 #[derive(Debug, Default)]

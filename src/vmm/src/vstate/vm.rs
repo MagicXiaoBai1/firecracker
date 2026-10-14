@@ -5,7 +5,6 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the THIRD-PARTY file.
 
-use std::any::Any;
 use std::collections::HashMap;
 use std::fs::OpenOptions;
 use std::io::Write;
@@ -28,7 +27,6 @@ use vmm_sys_util::eventfd::EventFd;
 pub use crate::arch::{ArchVm as Vm, ArchVmError, VmState};
 use crate::arch::{GSI_MSI_END, host_page_size};
 use crate::devices::vfio::pcie::dma_engine::DmaEngine;
-use crate::devices::vfio::pcie::vfio_device::VfioPciDevice;
 use crate::logger::info;
 use crate::pci::{DeviceRelocation, DeviceRelocationError, PciDevice};
 use crate::persist::CreateSnapshotError;
@@ -67,6 +65,7 @@ pub struct VmCommon {
     pub mmio_bus: Arc<Bus>,
 
     // TODO 在这里放个 DmaEngine
+    /// VFIO DMA engine, manages the IOMMU mapping of guest memory (IOVA = GPA).
     pub dma_engine: DmaEngine,
 }
 

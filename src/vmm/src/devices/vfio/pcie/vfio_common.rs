@@ -32,7 +32,7 @@ use super::msix::VfioInterruptEngine;
 
 const PCI_CONFIG_REGISTER_SIZE: usize = 4;
 
-trait MemoryRecognizerDebug: MemoryRecognizer + fmt::Debug + Send + Sync {}
+pub(crate) trait MemoryRecognizerDebug: MemoryRecognizer + fmt::Debug + Send + Sync {}
 impl<T> MemoryRecognizerDebug for T where T: MemoryRecognizer + fmt::Debug + Send + Sync {}
 trait VfioMsixOpsDebug: VfioMsixOps + fmt::Debug + Send + Sync {}
 impl<T> VfioMsixOpsDebug for T where T: VfioMsixOps + fmt::Debug + Send + Sync {}

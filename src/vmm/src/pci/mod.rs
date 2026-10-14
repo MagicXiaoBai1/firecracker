@@ -63,12 +63,14 @@ pub trait PciDevice: Send {
         Ok(())
     }
 
+    /// Returns whether this device's BARs need relocation tracking on the VM.
     fn need_bar_relocation_on_vm(&self) -> bool {
         // 默认不支持（所有未实现的设备直接返回false）
         false
     }
 
-    fn get_bar_region_slot(&self, index: u64, offset: u64, len: u64) -> Option<u32> {
+    /// Returns the KVM memslot backing the BAR sub-region at `offset..offset + len`, if mapped.
+    fn get_bar_region_slot(&self, _index: u64, _offset: u64, _len: u64) -> Option<u32> {
         // TODO vfio设备在初始化时分配 slot
         None
     }

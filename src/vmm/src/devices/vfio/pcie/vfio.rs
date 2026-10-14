@@ -135,7 +135,7 @@ pub(crate) trait VfioMsixOps {
     fn inject_msix_and_clear_pba(&mut self, vector: usize);
 }
 
-pub(crate) struct VfioDeviceWrapper {
+pub struct VfioDeviceWrapper {
     device: Arc<VfioDevice>,
 }
 

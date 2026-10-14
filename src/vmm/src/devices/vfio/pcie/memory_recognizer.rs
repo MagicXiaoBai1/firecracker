@@ -25,7 +25,7 @@ const PCI_CONFIG_CAPABILITY_PTR_MASK: u8 = 0xfc;
 const MSIX_TABLE_ENTRY_SIZE: u64 = 16;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct BarLocation {
+pub struct BarLocation {
     pub bar_index: u8,
     pub offset: u64,
     pub len: u64,
@@ -40,6 +40,7 @@ impl BarLocation {
     }
 }
 
+#[derive(Debug)]
 pub enum IovaAcccessRawType<'a>{
     WriteConfigRegister {reg_idx: usize, offset: u64, data: &'a [u8]},
     ReadConfigRegister {reg_idx: usize},

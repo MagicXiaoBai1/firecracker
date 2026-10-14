@@ -70,6 +70,16 @@ pub struct VfioPciDevice {
 
 }
 
+// 手动实现：只输出概要，避免要求 VfioCommon 等内部字段实现 Debug
+impl std::fmt::Debug for VfioPciDevice {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("VfioPciDevice")
+            .field("id", &self.id)
+            .field("pci_device_bdf", &self.pci_device_bdf)
+            .finish()
+    }
+}
+
 
 impl VfioPciDevice {
     pub fn new(
