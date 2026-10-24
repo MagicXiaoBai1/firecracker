@@ -35,7 +35,7 @@ env:
 jobs:
   unit-tests:
     name: Unit tests (x86_64, root)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04  # 固定版本：ubuntu-latest 已切 26.04，其 cmake 4.x/新 libclang 与当前依赖树（bindgen 0.69、aws-lc-sys）不兼容（2026-10 首轮 CI 失败）；升级依赖后再回到 latest
     steps:
       - name: "Checkout repository"
         uses: actions/checkout@v4
@@ -59,7 +59,7 @@ jobs:
 
   check-aarch64:
     name: Check (aarch64 cross)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04  # 固定版本：ubuntu-latest 已切 26.04，其 cmake 4.x/新 libclang 与当前依赖树（bindgen 0.69、aws-lc-sys）不兼容（2026-10 首轮 CI 失败）；升级依赖后再回到 latest
     steps:
       - name: "Checkout repository"
         uses: actions/checkout@v4
