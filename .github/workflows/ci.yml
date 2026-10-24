@@ -52,7 +52,16 @@ jobs:
           key: unit-tests-v1-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: unit-tests-v1-
       - name: "Run unit tests (as root: tap/jailer/KVM need privileges)"
-        run: sudo -E env "PATH=$PATH" "HOME=$HOME" cargo test --workspace --locked --no-fail-fast
+        run: |
+          set -o pipefail
+          sudo -E env "PATH=$PATH" "HOME=$HOME" cargo test --workspace --locked --no-fail-fast 2>&1 | tee /tmp/build.log
+      - name: "Dump errors to job summary (public, for log-less debugging)"
+        if: failure()
+        run: |
+          echo '## build/test 错误摘录（unit-tests）' >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          grep -B2 -A18 -m8 -E "^error(\[|:)" /tmp/build.log >> "$GITHUB_STEP_SUMMARY" || tail -60 /tmp/build.log >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
       - name: "Restore target dir ownership for caching"
         if: always()
         run: sudo chown -R $(id -u):$(id -g) build/cargo_target
@@ -82,4 +91,13 @@ jobs:
           CC_aarch64_unknown_linux_gnu: aarch64-linux-gnu-gcc
           CXX_aarch64_unknown_linux_gnu: aarch64-linux-gnu-g++
           AR_aarch64_unknown_linux_gnu: aarch64-linux-gnu-ar
-        run: cargo check --workspace --target aarch64-unknown-linux-gnu --locked
+        run: |
+          set -o pipefail
+          cargo check --workspace --target aarch64-unknown-linux-gnu --locked 2>&1 | tee /tmp/build.log
+      - name: "Dump errors to job summary (public, for log-less debugging)"
+        if: failure()
+        run: |
+          echo '## check 错误摘录（aarch64）' >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          grep -B2 -A18 -m8 -E "^error(\[|:)" /tmp/build.log >> "$GITHUB_STEP_SUMMARY" || tail -60 /tmp/build.log >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
